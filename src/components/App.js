@@ -474,6 +474,12 @@ class App extends Component {
 
         this.setBusy(true)
 
+        let moveNumber = -1, m = filename.match(/(.*)#(\d+)$/)
+        if (m) {
+            filename = m[1]
+            moveNumber = m[2] | 0
+        }
+
         let {extname} = require('path')
         let extension = extname(filename).slice(1)
 
@@ -504,6 +510,10 @@ class App extends Component {
 
             if (setting.get('game.goto_end_after_loading')) {
                 this.goToEnd()
+            }
+
+            if (moveNumber >= 0) {
+                this.goToMoveNumber(moveNumber)
             }
         }
 
