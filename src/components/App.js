@@ -2289,9 +2289,7 @@ class App extends Component {
 
         state = Object.assign(state, this.inferredState)
 
-        if (setting.get('app.dump_state')) {
-            ipcRenderer.send('dump-state', {treePosition: sabaki.state.treePosition})
-        }
+        ipcRenderer.send('dump-state', {treePosition: sabaki.state.treePosition})
 
         return h('section',
             {
