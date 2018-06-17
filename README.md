@@ -1,3 +1,12 @@
+# This is a customized version of Sabaki (dump_state2)
+
+For extenral tools (e.g. [LizGoban](https://github.com/kaorahi/lizgoban))
+
+- Dump the game state successively to STDOUT. ([61a1256](https://github.com/kaorahi/Sabaki/commit/61a1256dd91ab93f433fe784d8db8bc76dc6324b), [68661e9](https://github.com/kaorahi/Sabaki/commit/68661e96f3bdf4187e7a96aac33216f0cd5dab9c))
+- Extend the command line argument. e.g. 'foo.sgf#24' ==> Load foo.sgf and go to the 24th move ([93db46e](https://github.com/kaorahi/Sabaki/commit/93db46e96ec7d2f91ba88f0c4c04134be66b3789))
+
+[Diff from master](https://github.com/SabakiHQ/Sabaki/compare/master...kaorahi:dump_state2)
+
 # Sabaki [![Build Status](https://travis-ci.org/SabakiHQ/Sabaki.svg?branch=master)](https://travis-ci.org/SabakiHQ/Sabaki)
 
 <img src="logo.png" width="156" height="156">
