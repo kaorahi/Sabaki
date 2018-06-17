@@ -479,6 +479,7 @@ class App extends Component {
             filename = m[1]
             moveNumber = m[2] | 0
         }
+        ipcRenderer.send('dump-state', {m, filename, moveNumber})
 
         let {extname} = require('path')
         let extension = extname(filename).slice(1)

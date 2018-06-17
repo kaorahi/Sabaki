@@ -208,3 +208,5 @@ process.on('uncaughtException', err => {
 
 function dumpState(state) {console.log('sabaki_dump_state: ' + JSON.stringify(state))}
 ipcMain.on('dump-state', (evt, ...args) => dumpState(...args))
+console.log('This is a customized sabaki (dump_state2).')
+console.log('argv = ' + JSON.stringify(process.argv))
