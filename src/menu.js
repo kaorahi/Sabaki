@@ -378,9 +378,14 @@ let data = [
                 click: () => sabaki.syncEngines()
             },
             {
-                label: 'Generate &Move',
+                label: 'Start &Playing',
                 accelerator: 'F5',
-                click: () => sabaki.startGeneratingMoves()
+                click: () => sabaki.generateMove({followUp: true})
+            },
+            {
+                label: 'Generate &Move',
+                accelerator: 'F10',
+                click: () => sabaki.generateMove()
             },
             {type: 'separator'},
             {
@@ -521,7 +526,7 @@ let data = [
             },
             {type: 'separator'},
             {
-                label: 'GitHub &Respository',
+                label: 'GitHub &Repository',
                 click: () => shell.openExternal(`https://github.com/SabakiHQ/${sabaki.appName}`)
             },
             {

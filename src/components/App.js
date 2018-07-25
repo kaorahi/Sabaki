@@ -928,14 +928,14 @@ class App extends Component {
                 let node = {[color]: [sgf.stringifyVertex(vertex)]}
 
                 newTree.nodes = [node]
-                newTree.parent = splitted
+                newTree.parent = splitted[0]
 
-                splitted.subtrees.push(newTree)
-                splitted.current = splitted.subtrees.length - 1
+                splitted[0].subtrees.push(newTree)
+                splitted[0].current = splitted[0].subtrees.length - 1
 
                 if (updateRoot) {
                     let {gameTrees} = this.state
-                    gameTrees[gameTrees.indexOf(tree)] = splitted
+                    gameTrees[gameTrees.indexOf(tree)] = splitted[0]
                 }
 
                 nextTreePosition = [newTree, 0]
@@ -985,7 +985,7 @@ class App extends Component {
 
         if (sendToEngine && this.attachedEngineControllers.some(x => x != null)) {
             let passPlayer = pass ? player : null
-            setTimeout(() => this.startGeneratingMoves({passPlayer}), setting.get('gtp.move_delay'))
+            setTimeout(() => this.generateMove({passPlayer}), setting.get('gtp.move_delay'))
         }
     }
 
@@ -1030,10 +1030,10 @@ class App extends Component {
                 let updateRoot = tree.parent == null
                 let splitted = gametree.split(tree, index)
 
-                if (splitted != tree || splitted.subtrees.length != 0) {
+                if (splitted[0] != tree || splitted[0].subtrees.length !== 0) {
                     tree = gametree.new()
-                    tree.parent = splitted
-                    splitted.subtrees.push(tree)
+                    tree.parent = splitted[0]
+                    splitted[0].subtrees.push(tree)
                 }
 
                 node = {PL: currentPlayer > 0 ? ['B'] : ['W']}
@@ -1042,7 +1042,7 @@ class App extends Component {
 
                 if (updateRoot) {
                     let {gameTrees} = this.state
-                    gameTrees[gameIndex] = splitted
+                    gameTrees[gameIndex] = splitted[0]
                 }
             }
 
@@ -1627,7 +1627,7 @@ class App extends Component {
 
     copyVariation(tree, index) {
         let clone = gametree.clone(tree)
-        if (index != 0) gametree.split(clone, index - 1)
+        if (index != 0) clone = gametree.split(clone, index - 1)[1]
 
         this.copyVariationData = clone
     }
@@ -1654,18 +1654,18 @@ class App extends Component {
         let splitted = gametree.split(tree, index)
         let copied = gametree.clone(this.copyVariationData)
 
-        copied.parent = splitted
-        splitted.subtrees.push(copied)
+        copied.parent = splitted[0]
+        splitted[0].subtrees.push(copied)
 
         if (updateRoot) {
             let {gameTrees} = this.state
-            gameTrees[this.inferredState.gameIndex] = splitted
+            gameTrees[this.inferredState.gameIndex] = splitted[0]
             this.setState({gameTrees})
         }
 
-        if (splitted.subtrees.length === 1) {
-            gametree.reduce(splitted)
-            this.setCurrentTreePosition(splitted, oldLength)
+        if (splitted[0].subtrees.length === 1) {
+            let reduced = gametree.reduce(splitted[0])
+            this.setCurrentTreePosition(reduced, oldLength)
         } else {
             this.setCurrentTreePosition(copied, 0)
         }
@@ -1680,10 +1680,10 @@ class App extends Component {
         let {rootTree, gameIndex} = this.inferredState
         let board = gametree.getBoard(tree, index)
         let rootNode = rootTree.nodes[0]
-        let inherit = ['BR', 'BT', 'DT', 'EV', 'GN', 'GC', 'PB', 'PW', 'RE', 'SO', 'WT', 'WR']
+        let inherit = ['BR', 'BT', 'DT', 'EV', 'GN', 'GC', 'PB', 'PW', 'RE', 'SO', 'SZ', 'WT', 'WR']
 
         let clone = gametree.clone(tree)
-        if (index !== 0) gametree.split(clone, index - 1)
+        if (index !== 0) clone = gametree.split(clone, index - 1)[1]
         let node = clone.nodes[0]
 
         node.AB = []
@@ -2106,16 +2106,16 @@ class App extends Component {
                 let splitted = gametree.split(tree, index)
 
                 for (let subtree of subtrees) {
-                    subtree.parent = splitted
+                    subtree.parent = splitted[0]
                 }
 
-                splitted.subtrees.push(...subtrees)
-                gametree.reduce(splitted)
+                splitted[0].subtrees.push(...subtrees)
 
-                gameTrees[gameIndex] = gametree.getRoot(splitted)
+                let reduced = gametree.reduce(splitted[0])
+                gameTrees[gameIndex] = gametree.getRoot(reduced)
 
                 this.setState({gameTrees})
-                this.setCurrentTreePosition(...gametree.navigate(splitted, splitted.nodes.length - 1, 1))
+                this.setCurrentTreePosition(...gametree.navigate(reduced, reduced.nodes.length - 1, 1))
             }
         }
 
@@ -2169,13 +2169,13 @@ class App extends Component {
         this.setBusy(false)
     }
 
-    async startGeneratingMoves({passPlayer = null, followUp = false} = {}) {
+    async generateMove({passPlayer = null, firstMove = true, followUp = false} = {}) {
         this.closeDrawer()
 
-        if (followUp && !this.state.generatingMoves) {
+        if (!firstMove && !this.state.generatingMoves) {
             this.hideInfoOverlay()
             return
-        } else if (!followUp) {
+        } else if (firstMove) {
             this.setState({generatingMoves: true})
         }
 
@@ -2199,8 +2199,8 @@ class App extends Component {
             }
         }
 
-        if (!followUp && otherController != null) {
-            this.flashInfoOverlay('Press Esc to stop generating moves')
+        if (firstMove && followUp && otherController != null) {
+            this.flashInfoOverlay('Press Esc to stop playing')
         }
 
         this.setBusy(true)
@@ -2245,9 +2245,9 @@ class App extends Component {
             board: gametree.getBoard(...this.state.treePosition)
         }
 
-        if (otherController != null && !doublePass) {
+        if (followUp && otherController != null && !doublePass) {
             await helper.wait(setting.get('gtp.move_delay'))
-            this.startGeneratingMoves({passPlayer: pass ? sign : null, followUp: true})
+            this.generateMove({passPlayer: pass ? sign : null, firstMove: false, followUp})
         } else {
             this.stopGeneratingMoves()
             this.hideInfoOverlay()
