@@ -1,5 +1,6 @@
 const fs = require('fs')
 const EventEmitter = require('events')
+const {extname} = require('path')
 const {ipcRenderer, remote} = require('electron')
 const {app, Menu} = remote
 const {h, render, Component} = require('preact')
@@ -22,9 +23,9 @@ const influence = require('@sabaki/influence')
 deadstones.useFetch('./node_modules/@sabaki/deadstones/wasm/deadstones_bg.wasm')
 
 const Board = require('../modules/board')
+const EngineSyncer = require('../modules/enginesyncer')
 const boardmatcher = require('../modules/boardmatcher')
 const dialog = require('../modules/dialog')
-const enginesyncer = require('../modules/enginesyncer')
 const fileformats = require('../modules/fileformats')
 const gametree = require('../modules/gametree')
 const helper = require('../modules/helper')
@@ -66,14 +67,13 @@ class App extends Component {
             // Goban
 
             highlightVertices: [],
-            heatMap: null,
+            playVariation: null,
             showCoordinates: null,
             showMoveColorization: null,
             showNextMoves: null,
             showSiblings: null,
             fuzzyStonePlacement: null,
-            animatedStonePlacement: null,
-            animatedVertex: null,
+            animateStonePlacement: null,
 
             // Sidebar
 
@@ -92,6 +92,8 @@ class App extends Component {
             attachedEngines: [null, null],
             engineCommands: [[], []],
             generatingMoves: false,
+            analysisTreePosition: null,
+            analysis: null,
 
             // Drawers
 
@@ -116,12 +118,11 @@ class App extends Component {
         this.window = remote.getCurrentWindow()
 
         this.treeHash = this.generateTreeHash()
-        this.attachedEngineControllers = [null, null]
-        this.engineStates = [null, null]
+        this.attachedEngineSyncers = [null, null]
 
         // Expose submodules
 
-        this.modules = {Board, boardmatcher, dialog, enginesyncer,
+        this.modules = {Board, EngineSyncer, boardmatcher, dialog,
             fileformats, gametree, helper, setting, sound}
 
         // Bind state to settings
@@ -187,7 +188,7 @@ class App extends Component {
 
         // Handle mouse wheel
 
-        for (let el of document.querySelectorAll('#main main, #graph')) {
+        for (let el of document.querySelectorAll('#main main, #graph, #winrategraph')) {
             el.addEventListener('wheel', evt => {
                 evt.preventDefault()
 
@@ -211,12 +212,10 @@ class App extends Component {
             this.loadFile(evt.dataTransfer.files[0].path)
         })
 
-        // Handle escape key
+        // Handle keys
 
-        document.addEventListener('keyup', evt => {
-            if (evt.keyCode === 27) {
-                // Escape
-
+        document.addEventListener('keydown', evt => {
+            if (evt.key === 'Escape') {
                 if (this.state.generatingMoves) {
                     this.stopGeneratingMoves()
                 } else if (this.state.openDrawer != null) {
@@ -226,6 +225,20 @@ class App extends Component {
                 } else if (this.state.fullScreen) {
                     this.setState({fullScreen: false})
                 }
+            } else if (['ArrowUp', 'ArrowDown'].includes(evt.key)) {
+                if (document.activeElement !== document.body || evt.ctrlKey || evt.metaKey) return
+                evt.preventDefault()
+
+                let sign = evt.key === 'ArrowUp' ? -1 : 1
+                this.startAutoscrolling(sign)
+            }
+        })
+
+        document.addEventListener('keyup', evt => {
+            if (this.autoscrollId == null) return
+
+            if (['ArrowUp', 'ArrowDown'].includes(evt.key)) {
+                this.stopAutoscrolling()
             }
         })
 
@@ -314,7 +327,7 @@ class App extends Component {
             'view.show_next_moves': 'showNextMoves',
             'view.show_siblings': 'showSiblings',
             'view.fuzzy_stone_placement': 'fuzzyStonePlacement',
-            'view.animated_stone_placement': 'animatedStonePlacement',
+            'view.animated_stone_placement': 'animateStonePlacement',
             'graph.grid_size': 'graphGridSize',
             'graph.node_size': 'graphNodeSize',
             'engines.list': 'engines',
@@ -585,14 +598,14 @@ class App extends Component {
         this.events.emit('fileLoad')
     }
 
-    saveFile(filename = null) {
-        if (!filename) {
+    saveFile(filename = null, confirmExtension = true) {
+        if (!filename || confirmExtension && extname(filename) !== '.sgf') {
             let cancel = false
 
             dialog.showSaveDialog({
                 filters: [fileformats.sgf.meta, {name: 'All Files', extensions: ['*']}]
             }, ({result}) => {
-                if (result) this.saveFile(result)
+                if (result) this.saveFile(result, false)
                 cancel = !result
             })
 
@@ -689,18 +702,51 @@ class App extends Component {
             vertex = board.coord2vertex(vertex)
         }
 
+        let [vx, vy] = vertex
+
         if (['play', 'autoplay'].includes(this.state.mode)) {
             if (button === 0) {
                 if (board.get(vertex) === 0) {
-                    this.makeMove(vertex, {sendToEngine: true})
-                } else if (vertex in board.markups
-                && board.markups[vertex][0] === 'point'
-                && setting.get('edit.click_currentvertex_to_remove')) {
+                    let autoGenmove = setting.get('gtp.auto_genmove')
+                    this.makeMove(vertex, {sendToEngine: autoGenmove})
+                } else if (
+                    board.markers[vy][vx] != null
+                    && board.markers[vy][vx].type === 'point'
+                    && setting.get('edit.click_currentvertex_to_remove')
+                ) {
                     this.removeNode(tree, index)
                 }
             } else if (button === 2) {
-                if (vertex in board.markups && board.markups[vertex][0] === 'point') {
+                if (
+                    board.markers[vy][vx] != null
+                    && board.markers[vy][vx].type === 'point'
+                ) {
+                    // Show annotation context menu
+
                     this.openCommentMenu(tree, index, {x, y})
+                } else if (this.state.analysis != null) {
+                    // Show analysis context menu
+
+                    let data = this.state.analysis.find(x => helper.vertexEquals(x.vertex, vertex))
+
+                    if (data != null) {
+                        let maxVisitsWin = Math.max(...this.state.analysis.map(x => x.visits * x.win))
+                        let strength = Math.round(data.visits * data.win * 8 / maxVisitsWin) + 1
+                        let annotationProp = strength >= 8 ? 'TE'
+                            : strength >= 5 ? 'IT'
+                            : strength >= 3 ? 'DO'
+                            : 'BM'
+                        let annotationValues = {'BM': '1', 'DO': '', 'IT': '', 'TE': '1'}
+                        let winrate = Math.round((data.sign > 0 ? data.win : 100 - data.win) * 100) / 100
+
+                        this.openVariationMenu(data.sign, data.variation, {
+                            x, y,
+                            startNodeProperties: {
+                                [annotationProp]: [annotationValues[annotationProp]],
+                                SBKV: [winrate.toString()]
+                            }
+                        })
+                    }
                 }
             }
         } else if (this.state.mode === 'edit') {
@@ -822,6 +868,7 @@ class App extends Component {
         }
 
         let [tree, index] = this.state.treePosition
+        let node = tree.nodes[index]
         let board = gametree.getBoard(tree, index)
 
         if (typeof vertex == 'string') {
@@ -835,7 +882,7 @@ class App extends Component {
         if (!player) player = this.inferredState.currentPlayer
         let color = player > 0 ? 'B' : 'W'
         let capture = false, suicide = false, ko = false
-        let createNode = true
+        let newNode = {[color]: [sgf.stringifyVertex(vertex)]}
 
         if (!pass) {
             // Check for ko
@@ -882,65 +929,10 @@ class App extends Component {
 
         // Update data
 
-        let nextTreePosition
-
-        if (tree.subtrees.length === 0 && tree.nodes.length - 1 === index) {
-            // Append move
-
-            let node = {}
-            node[color] = [sgf.stringifyVertex(vertex)]
-            tree.nodes.push(node)
-
-            nextTreePosition = [tree, tree.nodes.length - 1]
-        } else {
-            if (index !== tree.nodes.length - 1) {
-                // Search for next move
-
-                let nextNode = tree.nodes[index + 1]
-                let moveExists = color in nextNode
-                    && helper.vertexEquals(sgf.parseVertex(nextNode[color][0]), vertex)
-
-                if (moveExists) {
-                    nextTreePosition = [tree, index + 1]
-                    createNode = false
-                }
-            } else {
-                // Search for variation
-
-                let variations = tree.subtrees.filter(subtree => {
-                    return subtree.nodes.length > 0
-                        && color in subtree.nodes[0]
-                        && helper.vertexEquals(sgf.parseVertex(subtree.nodes[0][color][0]), vertex)
-                })
-
-                if (variations.length > 0) {
-                    nextTreePosition = [variations[0], 0]
-                    createNode = false
-                }
-            }
-
-            if (createNode) {
-                // Create variation
-
-                let updateRoot = tree.parent == null
-                let splitted = gametree.split(tree, index)
-                let newTree = gametree.new()
-                let node = {[color]: [sgf.stringifyVertex(vertex)]}
-
-                newTree.nodes = [node]
-                newTree.parent = splitted[0]
-
-                splitted[0].subtrees.push(newTree)
-                splitted[0].current = splitted[0].subtrees.length - 1
-
-                if (updateRoot) {
-                    let {gameTrees} = this.state
-                    gameTrees[gameTrees.indexOf(tree)] = splitted[0]
-                }
-
-                nextTreePosition = [newTree, 0]
-            }
-        }
+        let oldTreeLength = tree.nodes.length
+        let oldSubtreesCount = tree.subtrees.length
+        let [nextTreePosition] = gametree.mergeInsert(tree, index, [newNode])
+        let createNode = tree.nodes.length > oldTreeLength || tree.subtrees.length > oldSubtreesCount
 
         this.setCurrentTreePosition(...nextTreePosition)
 
@@ -967,9 +959,8 @@ class App extends Component {
         let enterScoring = false
 
         if (pass && createNode && prev) {
-            let prevNode = tree.nodes[index]
             let prevColor = color === 'B' ? 'W' : 'B'
-            let prevPass = prevColor in prevNode && prevNode[prevColor][0] === ''
+            let prevPass = prevColor in node && node[prevColor][0] === ''
 
             if (prevPass) {
                 enterScoring = true
@@ -981,9 +972,9 @@ class App extends Component {
 
         this.events.emit('moveMake', {pass, capture, suicide, ko, enterScoring})
 
-        // Send command to engine
+        if (sendToEngine && this.attachedEngineSyncers.some(x => x != null)) {
+            // Send command to engine
 
-        if (sendToEngine && this.attachedEngineControllers.some(x => x != null)) {
             let passPlayer = pass ? player : null
             setTimeout(() => this.generateMove({passPlayer}), setting.get('gtp.move_delay'))
         }
@@ -1027,7 +1018,6 @@ class App extends Component {
             if ('B' in node || 'W' in node || gametree.navigate(tree, index, 1)) {
                 // New variation needed
 
-                let updateRoot = tree.parent == null
                 let splitted = gametree.split(tree, index)
 
                 if (splitted[0] != tree || splitted[0].subtrees.length !== 0) {
@@ -1039,11 +1029,6 @@ class App extends Component {
                 node = {PL: currentPlayer > 0 ? ['B'] : ['W']}
                 index = tree.nodes.length
                 tree.nodes.push(node)
-
-                if (updateRoot) {
-                    let {gameTrees} = this.state
-                    gameTrees[gameIndex] = splitted[0]
-                }
             }
 
             let sign = tool === 'stone_1' ? 1 : -1
@@ -1079,12 +1064,12 @@ class App extends Component {
 
             // Check whether to remove a line
 
-            let toDelete = board.lines.findIndex(x => helper.equals(x.slice(0, 2), [vertex, endVertex]))
+            let toDelete = board.lines.findIndex(x => helper.equals([x.v1, x.v2], [vertex, endVertex]))
 
             if (toDelete === -1) {
-                toDelete = board.lines.findIndex(x => helper.equals(x.slice(0, 2), [endVertex, vertex]))
+                toDelete = board.lines.findIndex(x => helper.equals([x.v1, x.v2], [endVertex, vertex]))
 
-                if (toDelete >= 0 && tool !== 'line' && board.lines[toDelete][2]) {
+                if (toDelete >= 0 && tool !== 'line' && board.lines[toDelete].type === 'arrow') {
                     // Do not delete after all
                     toDelete = -1
                 }
@@ -1095,17 +1080,17 @@ class App extends Component {
             if (toDelete >= 0) {
                 board.lines.splice(toDelete, 1)
             } else {
-                board.lines.push([vertex, endVertex, tool === 'arrow'])
+                board.lines.push({v1: vertex, v2: endVertex, type: tool})
             }
 
             node.LN = []
             node.AR = []
 
-            for (let [v1, v2, arrow] of board.lines) {
+            for (let {v1, v2, type} of board.lines) {
                 let [p1, p2] = [v1, v2].map(sgf.stringifyVertex)
                 if (p1 === p2) continue
 
-                node[arrow ? 'AR' : 'LN'].push([p1, p2].join(':'))
+                node[type === 'arrow' ? 'AR' : 'LN'].push([p1, p2].join(':'))
             }
 
             if (node.LN.length === 0) delete node.LN
@@ -1113,12 +1098,17 @@ class App extends Component {
         } else {
             // Mutate board first, then apply changes to actual game tree
 
+            let [x, y] = vertex
+
             if (tool === 'number') {
-                if (vertex in board.markups && board.markups[vertex][0] === 'label') {
-                    delete board.markups[vertex]
+                if (
+                    board.markers[y][x] != null
+                    && board.markers[y][x].type === 'label'
+                ) {
+                    board.markers[y][x] = null
                 } else {
                     let number = !node.LB ? 1 : node.LB
-                        .map(x => parseFloat(x.substr(3)))
+                        .map(x => parseFloat(x.slice(3)))
                         .filter(x => !isNaN(x))
                         .sort((a, b) => a - b)
                         .filter((x, i, arr) => i === 0 || x !== arr[i - 1])
@@ -1126,14 +1116,19 @@ class App extends Component {
                         .findIndex((x, i) => i + 1 !== x) + 1
 
                     argument = number.toString()
-                    board.markups[vertex] = [tool, number.toString()]
+                    board.markers[y][x] = {type: tool, label: number.toString()}
                 }
             } else if (tool === 'label') {
                 let label = argument
 
-                if (label != null && label.trim() === ''
-                || label == null && vertex in board.markups && board.markups[vertex][0] === 'label') {
-                    delete board.markups[vertex]
+                if (
+                    label != null
+                    && label.trim() === ''
+                    || label == null
+                    && board.markers[y][x] != null
+                    && board.markers[y][x].type === 'label'
+                ) {
+                    board.markers[y][x] = null
                 } else {
                     if (label == null) {
                         let alpha = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
@@ -1153,13 +1148,16 @@ class App extends Component {
                         argument = label
                     }
 
-                    board.markups[vertex] = [tool, label]
+                    board.markers[y][x] = {type: tool, label}
                 }
             } else {
-                if (vertex in board.markups && board.markups[vertex][0] === tool) {
-                    delete board.markups[vertex]
+                if (
+                    board.markers[y][x] != null
+                    && board.markers[y][x].type === tool
+                ) {
+                    board.markers[y][x] = null
                 } else {
-                    board.markups[vertex] = [tool, '']
+                    board.markers[y][x] = {type: tool}
                 }
             }
 
@@ -1171,13 +1169,13 @@ class App extends Component {
             for (let x = 0; x < board.width; x++) {
                 for (let y = 0; y < board.height; y++) {
                     let v = [x, y]
-                    if (!(v in board.markups)) continue
+                    if (board.markers[y][x] == null) continue
 
-                    let prop = data[board.markups[v][0]]
+                    let prop = data[board.markers[y][x].type]
                     let value = sgf.stringifyVertex(v)
 
                     if (prop === 'LB')
-                        value += ':' + board.markups[v][1]
+                        value += ':' + board.markers[y][x].label
 
                     if (prop in node) node[prop].push(value)
                     else node[prop] = [value]
@@ -1242,8 +1240,17 @@ class App extends Component {
             this.clearUndoPoint()
         }
 
+        if (this.state.analysisTreePosition != null) {
+            clearTimeout(this.navigateAnalysisId)
+
+            this.stopAnalysis({removeAnalysisData: false})
+            this.navigateAnalysisId = setTimeout(() => {
+                this.startAnalysis({showWarning: false})
+            }, setting.get('game.navigation_analysis_delay'))
+        }
+
         this.setState({
-            heatMap: null,
+            playVariation: null,
             blockedGuesses: [],
             highlightVertices: [],
             treePosition: [tree, index]
@@ -1360,6 +1367,27 @@ class App extends Component {
         let newIndex = Math.max(0, Math.min(gameTrees.length - 1, index + step))
 
         this.setCurrentTreePosition(gameTrees[newIndex], 0)
+    }
+
+    startAutoscrolling(step) {
+        if (this.autoscrollId != null) return
+
+        let minDelay = setting.get('autoscroll.min_interval')
+        let diff = setting.get('autoscroll.diff')
+
+        let scroll = (delay = null) => {
+            this.goStep(step)
+
+            clearTimeout(this.autoscrollId)
+            this.autoscrollId = setTimeout(() => scroll(Math.max(minDelay, delay - diff)), delay)
+        }
+
+        scroll(setting.get('autoscroll.max_interval'))
+    }
+
+    stopAutoscrolling() {
+        clearTimeout(this.autoscrollId)
+        this.autoscrollId = null
     }
 
     // Find Methods
@@ -1587,7 +1615,7 @@ class App extends Component {
         let clearProperties = properties => properties.forEach(p => delete node[p])
 
         if ('moveAnnotation' in data) {
-            let moveProps = {'BM': 1, 'DO': '', 'IT': '', 'TE': 1}
+            let moveProps = {'BM': '1', 'DO': '', 'IT': '', 'TE': '1'}
 
             clearProperties(Object.keys(moveProps))
 
@@ -1596,7 +1624,7 @@ class App extends Component {
         }
 
         if ('positionAnnotation' in data) {
-            let positionProps = {'UC': 1, 'GW': 1, 'GB': 1, 'DM': 1}
+            let positionProps = {'UC': '1', 'GW': '1', 'GB': '1', 'DM': '1'}
 
             clearProperties(Object.keys(positionProps))
 
@@ -1608,6 +1636,8 @@ class App extends Component {
     }
 
     rotateBoard(anticlockwise) {
+        sabaki.setUndoPoint('Undo Board Rotation')
+
         let root = gametree.getRoot(this.state.treePosition[0])
         let trees = gametree.getTreesRecursive(root)
         let info = this.getGameInfo(root)
@@ -1662,19 +1692,12 @@ class App extends Component {
         this.closeDrawer()
         this.setMode('play')
 
-        let updateRoot = !tree.parent
         let oldLength = tree.nodes.length
         let splitted = gametree.split(tree, index)
         let copied = gametree.clone(this.copyVariationData)
 
         copied.parent = splitted[0]
         splitted[0].subtrees.push(copied)
-
-        if (updateRoot) {
-            let {gameTrees} = this.state
-            gameTrees[this.inferredState.gameIndex] = splitted[0]
-            this.setState({gameTrees})
-        }
 
         if (splitted[0].subtrees.length === 1) {
             let reduced = gametree.reduce(splitted[0])
@@ -1857,7 +1880,7 @@ class App extends Component {
 
     // Menus
 
-    openNodeMenu(tree, index, options = {}) {
+    openNodeMenu(tree, index, {x, y} = {}) {
         if (this.state.mode === 'scoring') return
 
         let template = [
@@ -1879,11 +1902,11 @@ class App extends Component {
                 click: () => this.makeMainVariation(tree, index)
             },
             {
-                label: "Shift &Left",
+                label: 'Shift &Left',
                 click: () => this.shiftVariation(tree, index, -1)
             },
             {
-                label: "Shift Ri&ght",
+                label: 'Shift Ri&ght',
                 click: () => this.shiftVariation(tree, index, 1)
             },
             {type: 'separator'},
@@ -1901,10 +1924,10 @@ class App extends Component {
             }
         ]
 
-        helper.popupMenu(template, options.x, options.y)
+        helper.popupMenu(template, x, y)
     }
 
-    openCommentMenu(tree, index, options = {}) {
+    openCommentMenu(tree, index, {x, y} = {}) {
         let node = tree.nodes[index]
 
         let template = [
@@ -1984,26 +2007,53 @@ class App extends Component {
             item.click = () => this.setComment(tree, index, item.data)
         }
 
-        helper.popupMenu(template, options.x, options.y)
+        helper.popupMenu(template, x, y)
+    }
+
+    openVariationMenu(sign, variation, {x, y, appendSibling = false, startNodeProperties = {}} = {}) {
+        helper.popupMenu([{
+            label: '&Add Variation',
+            click: () => {
+                let isRootTree = this.state.treePosition[0].parent == null
+                let isRootNode = isRootTree && this.state.treePosition[1] === 0
+
+                if (appendSibling && isRootNode) {
+                    dialog.showMessageBox('The root node cannot have sibling nodes.', 'warning', ['OK'])
+                    return
+                }
+
+                let [color, opponent] = sign > 0 ? ['B', 'W'] : ['W', 'B']
+
+                gametree.mergeInsert(
+                    ...(
+                        !appendSibling
+                        ? this.state.treePosition
+                        : gametree.navigate(...this.state.treePosition, -1)
+                    ),
+                    variation.map((vertex, i) => Object.assign({
+                        [i % 2 === 0 ? color : opponent]: [sgf.stringifyVertex(vertex)]
+                    }, i === 0 ? startNodeProperties : {}))
+                )
+
+                this.setCurrentTreePosition(...this.state.treePosition)
+            }
+        }], x, y)
     }
 
     // GTP Engines
 
     attachEngines(...engines) {
-        let {dirname, resolve} = require('path')
-        let split = require('argv-split')
-        let {engineCommands, attachedEngines} = this.state
+        let {attachedEngines} = this.state
 
         if (helper.vertexEquals([...engines].reverse(), attachedEngines)) {
             // Just swap engines
 
-            this.attachedEngineControllers.reverse()
-            this.engineStates.reverse()
+            this.attachedEngineSyncers.reverse()
 
-            this.setState({
+            this.setState(({engineCommands}) => ({
                 engineCommands: engineCommands.reverse(),
                 attachedEngines: engines
-            })
+            }))
 
             return
         }
@@ -2013,45 +2063,32 @@ class App extends Component {
         for (let i = 0; i < attachedEngines.length; i++) {
             if (attachedEngines[i] === engines[i])
                 continue
-            if (this.attachedEngineControllers[i])
-                this.attachedEngineControllers[i].stop(quitTimeout)
+            if (this.attachedEngineSyncers[i])
+                this.attachedEngineSyncers[i].controller.stop(quitTimeout)
 
             try {
-                let {path, args, commands} = engines[i]
-                let controller = new gtp.Controller(path, split(args), {
-                    cwd: dirname(resolve(path))
-                })
+                let syncer = new EngineSyncer(engines[i])
+                this.attachedEngineSyncers[i] = syncer
 
-                controller.engine = engines[i]
+                syncer.controller.on('command-sent', evt => {
+                    if (evt.command.name === 'list_commands') {
+                        evt.getResponse().then(response =>
+                            this.setState(({engineCommands}) => {
+                                let j = this.attachedEngineSyncers.indexOf(syncer)
+                                engineCommands[j] = response.content.split('\n')
 
-                controller.on('command-sent', evt => {
-                    this.handleCommandSent(Object.assign({controller}, evt))
-                })
-
-                controller.on('started', () => {
-                    controller.sendCommand({name: 'name'})
-                    controller.sendCommand({name: 'version'})
-                    controller.sendCommand({name: 'protocol_version'})
-                    controller.sendCommand({name: 'list_commands'}).then(response => {
-                        engineCommands[i] = response.content.split('\n')
-                    })
-
-                    if (commands == null || commands.trim() === '') return
-
-                    for (let command of commands.split(';').filter(x => x.trim() !== '')) {
-                        controller.sendCommand(gtp.Command.fromString(command))
+                                return {engineCommands}
+                            })
+                        ).catch(helper.noop)
                     }
+
+                    this.handleCommandSent(Object.assign({syncer}, evt))
                 })
 
-                this.attachedEngineControllers[i] = controller
-                this.engineStates[i] = null
-
-                controller.start()
-
-                controller.on('stderr', ({content}) => {
+                syncer.controller.on('stderr', ({content}) => {
                     this.setState(({consoleLog}) => ({
                         consoleLog: [...consoleLog, {
-                            sign: this.attachedEngineControllers.indexOf(controller) === 0 ? 1 : -1,
+                            sign: this.attachedEngineSyncers.indexOf(syncer) === 0 ? 1 : -1,
                             name: engines[i].name,
                             command: null,
                             response: {content, internal: true}
@@ -2059,9 +2096,16 @@ class App extends Component {
                     }))
                 })
 
-                this.setState({engineCommands})
+                syncer.controller.on('stopped', () => this.setState(({engineCommands}) => {
+                    let j = this.attachedEngineSyncers.indexOf(syncer)
+                    engineCommands[j] = []
+
+                    return {engineCommands}
+                }))
+
+                syncer.controller.start()
             } catch (err) {
-                this.attachedEngineControllers[i] = null
+                this.attachedEngineSyncers[i] = null
                 engines[i] = null
             }
         }
@@ -2074,18 +2118,21 @@ class App extends Component {
     }
 
     suspendEngines() {
-        for (let controller of this.attachedEngineControllers) {
-            if (controller != null) controller.kill()
+        for (let syncer of this.attachedEngineSyncers) {
+            if (syncer != null) syncer.controller.kill()
         }
 
-        this.engineStates = [null, null]
+        this.stopGeneratingMoves()
+        this.hideInfoOverlay()
+        this.setBusy(false)
     }
 
-    async handleCommandSent({controller, command, getResponse}) {
-        let sign = 1 - this.attachedEngineControllers.indexOf(controller) * 2
+    handleCommandSent({syncer, command, subscribe, getResponse}) {
+        let sign = 1 - this.attachedEngineSyncers.indexOf(syncer) * 2
         if (sign > 1) sign = 0
 
-        let entry = {sign, name: controller.engine.name, command}
+        let {treePosition} = this.state
+        let entry = {sign, name: syncer.engine.name, command, waiting: true}
         let maxLength = setting.get('console.max_history_count')
 
         this.setState(({consoleLog}) => {
@@ -2095,96 +2142,163 @@ class App extends Component {
             return {consoleLog: newLog}
         })
 
-        let response = await getResponse()
-        let sabakiJsonMatch = response.content.match(/^#sabaki(.*)$/m) || ['', '{}']
+        let updateEntry = update => {
+            Object.assign(entry, update)
+            this.setState(({consoleLog}) => ({consoleLog}))
+        }
 
-        response.content = response.content.replace(/^#sabaki(.*)$/gm, '#sabaki{…}')
+        subscribe(({line, response, end}) => {
+            updateEntry({
+                response: Object.assign({}, response),
+                waiting: !end
+            })
 
-        this.setState(({consoleLog}) => {
-            let index = consoleLog.indexOf(entry)
-            if (index < 0) return {}
+            // Parse analysis info
 
-            let newLog = [...consoleLog]
-            newLog[index] = Object.assign({response}, entry)
+            if (
+                line.slice(0, 5) === 'info '
+                && helper.vertexEquals(this.state.treePosition, treePosition)
+            ) {
+                let sign = this.getPlayer(...treePosition)
+                let board = gametree.getBoard(...treePosition)
+                let analysis = line
+                    .split(/\s*info\s+/).slice(1)
+                    .map(x => x.trim())
+                    .map(x => {
+                        let match = x.match(/[A-Za-z]\d+(\s+[A-Za-z]\d+)*$/)
+                        if (match == null) return null
 
-            return {consoleLog: newLog}
+                        return [x.slice(0, match.index), match[0].split(/\s+/)]
+                    })
+                    .filter(x => x != null)
+                    .map(([x, y]) => [
+                        x.trim().split(/\s+/).slice(0, -1),
+                        y.filter(x => x.length >= 2)
+                    ])
+                    .map(([tokens, pv]) => {
+                        let keys = tokens.filter((_, i) => i % 2 === 0)
+                        let values = tokens.filter((_, i) => i % 2 === 1)
+
+                        keys.push('pv')
+                        values.push(pv)
+
+                        return keys.reduce((acc, x, i) => (acc[x] = values[i], acc), {})
+                    })
+                    .filter(({move}) => move.match(/^[A-Za-z]\d+$/))
+                    .map(({move, visits, winrate, pv}) => ({
+                        sign,
+                        vertex: board.coord2vertex(move),
+                        visits: +visits,
+                        win: +winrate / 100,
+                        variation: pv.map(x => board.coord2vertex(x))
+                    }))
+
+                let winrate = Math.max(...analysis.map(({win}) => win))
+                if (sign < 0) winrate = 100 - winrate
+
+                let [tree, index] = treePosition
+                tree.nodes[index].SBKV = [Math.round(winrate * 100) / 100]
+
+                this.setState({analysis})
+            }
         })
 
-        // Handle Sabaki JSON
-
-        let sabakiJson = JSON.parse(sabakiJsonMatch[1])
-
-        if (sabakiJson.variations != null) {
-            let subtrees = sgf.parse(sabakiJson.variations, {getId: helper.getId})
-
-            if (subtrees.length > 0) {
-                let {gameTrees} = this.state
-                let [tree, index] = gametree.navigate(...this.state.treePosition, -1)
-                let gameIndex = gameTrees.indexOf(gametree.getRoot(tree))
-                let splitted = gametree.split(tree, index)
-
-                for (let subtree of subtrees) {
-                    subtree.parent = splitted[0]
-                }
-
-                splitted[0].subtrees.push(...subtrees)
-
-                let reduced = gametree.reduce(splitted[0])
-                gameTrees[gameIndex] = gametree.getRoot(reduced)
-
-                this.setState({gameTrees})
-                this.setCurrentTreePosition(...gametree.navigate(reduced, reduced.nodes.length - 1, 1))
-            }
-        }
-
-        if (sabakiJson.node != null) {
-            let nodeInfo = sgf.parse(`(;${sabakiJson.node})`)[0].nodes[0]
-            let [tree, index] = this.state.treePosition
-            let node = tree.nodes[index]
-
-            for (let key in nodeInfo) {
-                if (key in node) node[key].push(...nodeInfo[key])
-                else node[key] = nodeInfo[key]
-            }
-
-            this.setCurrentTreePosition(tree, index)
-        }
-
-        if (sabakiJson.heatmap != null) {
-            this.setState({heatMap: sabakiJson.heatmap})
-        }
+        getResponse()
+        .catch(_ => updateEntry({
+            response: {internal: true, content: 'connection failed'},
+            waiting: false
+        }))
     }
 
     async syncEngines({passPlayer = null} = {}) {
-        if (this.attachedEngineControllers.every(x => x == null)) return
+        if (this.attachedEngineSyncers.every(x => x == null)) return
 
-        this.setBusy(true)
-
-        let {treePosition} = this.state
+        if (this.engineBusySyncing) return
+        this.engineBusySyncing = true
 
         try {
-            for (let i = 0; i < this.attachedEngineControllers.length; i++) {
-                if (this.attachedEngineControllers[i] == null) continue
+            while (true) {
+                let {treePosition} = this.state
 
-                let player = i === 0 ? 1 : -1
-                let controller = this.attachedEngineControllers[i]
-                let engineState = this.engineStates[i]
+                await Promise.all(this.attachedEngineSyncers.map(syncer => {
+                    if (syncer == null) return
+                    return syncer.sync(treePosition)
+                }))
 
-                this.engineStates[i] = await enginesyncer.sync(controller, engineState, treePosition)
+                if (helper.vertexEquals(treePosition, this.state.treePosition)) break
+            }
 
-                // Send pass if required
+            // Send pass if required
 
-                if (passPlayer != null && passPlayer !== player) {
-                    let color = passPlayer > 0 ? 'B' : 'W'
-                    controller.sendCommand({name: 'play', args: [color, 'pass']})
+            if (passPlayer != null) {
+                let color = passPlayer > 0 ? 'B' : 'W'
+                let {controller} = this.attachedEngineSyncers[passPlayer > 0 ? 0 : 1] || {}
+
+                if (controller != null) {
+                    await controller.sendCommand({name: 'play', args: [color, 'pass']})
                 }
             }
         } catch (err) {
-            dialog.showMessageBox(err.message, 'warning')
-            this.detachEngines()
+            this.engineBusySyncing = false
+            throw err
         }
 
-        this.setBusy(false)
+        this.engineBusySyncing = false
+    }
+
+    async startAnalysis({showWarning = true} = {}) {
+        if (
+            this.state.analysisTreePosition != null
+            && helper.vertexEquals(this.state.treePosition, this.state.analysisTreePosition)
+        ) return
+
+        this.setState({analysis: null, analysisTreePosition: this.state.treePosition})
+
+        let error = false
+        let {currentPlayer} = this.inferredState
+        let color = currentPlayer > 0 ? 'B' : 'W'
+        let controllerIndices = currentPlayer > 0 ? [0, 1] : [1, 0]
+
+        try {
+            await this.syncEngines()
+
+            let engineIndex = controllerIndices.find(i =>
+                this.attachedEngineSyncers[i] != null
+                && (this.attachedEngineSyncers[i].commands.includes('lz-analyze')
+                || this.attachedEngineSyncers[i].commands.includes('analyze'))
+            )
+
+            if (engineIndex != null) {
+                let {controller, commands} = this.attachedEngineSyncers[engineIndex]
+                let name = commands.includes('analyze') ? 'analyze' : 'lz-analyze'
+
+                let interval = setting.get('board.analysis_interval').toString()
+                let response = await controller.sendCommand({name, args: [color, interval]})
+
+                error = response.error
+            } else {
+                error = true
+            }
+        } catch (err) {
+            error = true
+        }
+
+        if (showWarning && error) {
+            dialog.showMessageBox('You haven’t attached any engines that supports analysis.', 'warning')
+            this.stopAnalysis()
+        }
+    }
+
+    stopAnalysis({removeAnalysisData = true} = {}) {
+        if (this.state.analysisTreePosition == null) return
+
+        for (let syncer of this.attachedEngineSyncers) {
+            if (syncer == null || syncer.controller.process == null) continue
+
+            syncer.controller.process.stdin.write('\n')
+        }
+
+        if (removeAnalysisData) this.setState({analysisTreePosition: null, analysis: null})
     }
 
     async generateMove({passPlayer = null, firstMove = true, followUp = false} = {}) {
@@ -2197,52 +2311,88 @@ class App extends Component {
             this.setState({generatingMoves: true})
         }
 
-        await this.syncEngines({passPlayer})
-
         let {currentPlayer, rootTree} = this.inferredState
         let [color, opponent] = currentPlayer > 0 ? ['B', 'W'] : ['W', 'B']
         let [playerIndex, otherIndex] = currentPlayer > 0 ? [0, 1] : [1, 0]
-        let playerController = this.attachedEngineControllers[playerIndex]
-        let otherController = this.attachedEngineControllers[otherIndex]
+        let playerSyncer = this.attachedEngineSyncers[playerIndex]
+        let otherSyncer = this.attachedEngineSyncers[otherIndex]
 
-        if (playerController == null) {
-            if (otherController != null) {
+        if (playerSyncer == null) {
+            if (otherSyncer != null) {
                 // Switch engines, so the attached engine can play
 
                 let engines = [...this.state.attachedEngines].reverse()
                 this.attachEngines(...engines)
-                ;[playerController, otherController] = [otherController, playerController]
+                ;[playerSyncer, otherSyncer] = [otherSyncer, playerSyncer]
             } else {
                 return
             }
         }
 
-        if (firstMove && followUp && otherController != null) {
+        this.setBusy(true)
+
+        try {
+            await this.syncEngines({passPlayer})
+        } catch (err) {
+            this.stopGeneratingMoves()
+            this.hideInfoOverlay()
+            this.setBusy(false)
+
+            return
+        }
+
+        if (firstMove && followUp && otherSyncer != null) {
             this.flashInfoOverlay('Press Esc to stop playing')
         }
 
-        this.setBusy(true)
+        let {commands} = this.attachedEngineSyncers[playerIndex]
+        let commandName = ['genmove_analyze', 'lz-genmove_analyze', 'genmove'].find(x => commands.includes(x))
 
-        let response = await playerController.sendCommand({name: 'genmove', args: [color]})
+        let responseContent = await (
+            commandName === 'genmove'
+            ? playerSyncer.controller.sendCommand({name: commandName, args: [color]})
+                .then(res => res.content)
+            : new Promise((resolve, reject) => {
+                let interval = setting.get('board.analysis_interval').toString()
+
+                playerSyncer.controller.sendCommand(
+                    {name: commandName, args: [color, interval]},
+                    ({line}) => {
+                        if (line.indexOf('play ') !== 0) return
+                        resolve(line.slice('play '.length).trim())
+                    }
+                )
+                .then(() => resolve(null))
+                .catch(reject)
+            })
+        ).catch(() => null)
+
         let sign = color === 'B' ? 1 : -1
         let pass = true
         let vertex = [-1, -1]
         let board = gametree.getBoard(rootTree, 0)
 
-        if (response.content.toLowerCase() !== 'pass') {
-            pass = false
-            vertex = board.coord2vertex(response.content)
-        }
-
-        if (response.content.toLowerCase() === 'resign') {
-            dialog.showMessageBox(`${playerController.engine.name} has resigned.`)
-
+        if (responseContent == null) {
             this.stopGeneratingMoves()
             this.hideInfoOverlay()
-            this.makeResign()
             this.setBusy(false)
 
             return
+        } else if (responseContent.toLowerCase() !== 'pass') {
+            pass = false
+
+            if (responseContent.toLowerCase() === 'resign') {
+                dialog.showMessageBox(`${playerSyncer.engine.name} has resigned.`)
+
+                this.stopGeneratingMoves()
+                this.hideInfoOverlay()
+                this.makeResign()
+                this.setBusy(false)
+
+                return
+            }
+
+            vertex = board.coord2vertex(responseContent)
         }
 
         let previousNode = this.state.treePosition[0].nodes[this.state.treePosition[1]]
@@ -2252,18 +2402,7 @@ class App extends Component {
 
         this.makeMove(vertex, {player: sign})
 
-        if (!doublePass && this.state.engineCommands[playerIndex].includes('sabaki-genmovelog')) {
-            // Send Sabaki specific GTP command
-
-            await playerController.sendCommand({name: 'sabaki-genmovelog'})
-        }
-
-        this.engineStates[playerIndex] = {
-            komi: this.engineStates[playerIndex] != null && this.engineStates[playerIndex].komi,
-            board: gametree.getBoard(...this.state.treePosition)
-        }
-
-        if (followUp && otherController != null && !doublePass) {
+        if (followUp && otherSyncer != null && !doublePass) {
             await helper.wait(setting.get('gtp.move_delay'))
             this.generateMove({passPlayer: pass ? sign : null, firstMove: false, followUp})
         } else {
@@ -2275,6 +2414,8 @@ class App extends Component {
     }
 
     stopGeneratingMoves() {
+        if (!this.state.generatingMoves) return
+
         this.showInfoOverlay('Please wait…')
         this.setState({generatingMoves: false})
     }

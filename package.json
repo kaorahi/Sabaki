@@ -1,7 +1,7 @@
 {
   "name": "sabaki",
   "productName": "Sabaki",
-  "version": "0.35.1",
+  "version": "0.40.1",
   "description": "An elegant Go/Baduk/Weiqi board and SGF editor for a more civilized age.",
   "author": "Yichuan Shen <shen.yichuan@gmail.com>",
   "homepage": "http://sabaki.yichuanshen.de",
@@ -17,7 +17,7 @@
   "build": {
     "appId": "de.yichuanshen.sabaki",
     "copyright": "Copyright © 2015-2018 Yichuan Shen",
-    "compression": "maximum",
+    "compression": "normal",
     "linux": {
       "target": "AppImage",
       "category": "Game"
@@ -61,34 +61,35 @@
     ]
   },
   "dependencies": {
+    "@mariotacke/color-thief": "^3.0.1",
     "@sabaki/deadstones": "^2.1.0",
-    "@sabaki/gtp": "^1.1.1",
+    "@sabaki/gtp": "^1.4.0",
     "@sabaki/influence": "^1.1.4",
     "@sabaki/sgf": "^2.1.0",
+    "@sabaki/shudan": "^1.3.1",
     "argv-split": "^2.0.1",
     "classnames": "^2.2.6",
-    "iconv-lite": "^0.4.23",
-    "jschardet": "^1.5.1",
+    "iconv-lite": "^0.4.24",
+    "jschardet": "^1.6.0",
     "natsort": "^1.0.6",
-    "octicons": "^8.0.0",
+    "octicons": "^8.1.2",
     "pikaday": "^1.7.0",
-    "preact": "^8.2.9",
-    "react-markdown": "^3.3.4",
+    "preact": "^8.3.1",
+    "react-markdown": "^3.6.0",
     "recursive-copy": "^2.0.9",
-    "remark-breaks": "^1.0.0",
+    "remark-breaks": "^1.0.1",
     "rimraf": "^2.6.2",
     "uuid": "^3.3.2"
   },
   "devDependencies": {
-    "electron": "^2.0.6",
-    "electron-builder": "^20.26.1",
+    "electron": "^3.0.8",
+    "electron-builder": "^20.34.0",
     "mocha": "^5.2.0",
     "raw-loader": "^0.5.1",
-    "react": "^16.4.2",
+    "react": "^16.6.1",
     "tmp": "0.0.33",
-    "uglifyjs-webpack-plugin": "^1.2.7",
-    "webpack": "^4.16.4",
-    "webpack-cli": "^3.1.0"
+    "webpack": "^4.25.1",
+    "webpack-cli": "^3.1.2"
   },
   "scripts": {
     "test": "mocha",

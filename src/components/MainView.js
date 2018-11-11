@@ -9,6 +9,7 @@ const ScoringBar = require('./bars/ScoringBar')
 const FindBar = require('./bars/FindBar')
 
 const gametree = require('../modules/gametree')
+const helper = require('../modules/helper')
 
 class MainView extends Component {
     constructor() {
@@ -25,7 +26,6 @@ class MainView extends Component {
             text: this.props.findText
         })
 
-        this.handleGobanResize = this.handleGobanResize.bind(this)
         this.handleGobanVertexClick = this.handleGobanVertexClick.bind(this)
         this.handleGobanLineDraw = this.handleGobanLineDraw.bind(this)
     }
@@ -34,7 +34,7 @@ class MainView extends Component {
         // Pressing Ctrl should show crosshair cursor on Goban in edit mode
 
         document.addEventListener('keydown', evt => {
-            if (evt.keyCode !== 17) return
+            if (evt.key !== 'Control' || evt.key !== 'Meta') return
 
             if (this.props.mode === 'edit') {
                 this.setState({gobanCrosshair: true})
@@ -42,7 +42,7 @@ class MainView extends Component {
         })
 
         document.addEventListener('keyup', evt => {
-            if (evt.keyCode !== 17) return
+            if (evt.key !== 'Control') return
 
             if (this.props.mode === 'edit') {
                 this.setState({gobanCrosshair: false})
@@ -56,32 +56,12 @@ class MainView extends Component {
         }
     }
 
-    handleGobanResize() {
-        /*  Because of board rendering issues, we want the width
-            and the height of `<main>` to be even */
-
-        if (this.mainElement == null) return
-
-        this.mainElement.style.width = ''
-        this.mainElement.style.height = ''
-
-        let {width, height} = window.getComputedStyle(this.mainElement)
-
-        width = parseFloat(width)
-        height = parseFloat(height)
-
-        if (width % 2 !== 0) width++
-        if (height % 2 !== 0) height++
-
-        this.setState({width, height})
-    }
-
     handleGobanVertexClick(evt) {
         sabaki.clickVertex(evt.vertex, evt)
     }
 
     handleGobanLineDraw(evt) {
-        let [v1, v2] = evt.line
+        let {v1, v2} = evt.line
         sabaki.useTool(this.props.selectedTool, v1, v2)
         sabaki.editVertexData = null
     }
@@ -93,11 +73,13 @@ class MainView extends Component {
         currentPlayer,
         gameInfo,
         attachedEngines,
+        analysisTreePosition,
 
         deadStones,
         scoringMethod,
         scoreBoard,
-        heatMap,
+        playVariation,
+        analysis,
         areaMap,
         blockedGuesses,
 
@@ -107,8 +89,7 @@ class MainView extends Component {
         showNextMoves,
         showSiblings,
         fuzzyStonePlacement,
-        animatedStonePlacement,
-        animatedVertex,
+        animateStonePlacement,
 
         undoable,
         undoText,
@@ -157,10 +138,16 @@ class MainView extends Component {
                 },
 
                 h(Goban, {
+                    treePosition,
                     board,
-                    highlightVertices: findVertex && mode === 'find' ? [findVertex]
+                    highlightVertices: findVertex && mode === 'find'
+                        ? [findVertex]
                         : highlightVertices,
-                    heatMap,
+                    analysis: mode === 'play'
+                        && analysisTreePosition != null
+                        && helper.vertexEquals(analysisTreePosition, treePosition)
+                        ? analysis
+                        : null,
                     paintMap,
                     dimmedStones: ['scoring', 'estimator'].includes(mode) ? deadStones : [],
 
@@ -170,13 +157,12 @@ class MainView extends Component {
                     showNextMoves: mode !== 'guess' && showNextMoves,
                     showSiblings: mode !== 'guess' && showSiblings,
                     fuzzyStonePlacement,
-                    animatedStonePlacement,
-                    animatedVertex,
+                    animateStonePlacement,
 
+                    playVariation,
                     drawLineMode: mode === 'edit' && ['arrow', 'line'].includes(selectedTool)
                         ? selectedTool : null,
 
-                    onBeforeResize: this.handleGobanResize,
                     onVertexClick: this.handleGobanVertexClick,
                     onLineDraw: this.handleGobanLineDraw
                 })

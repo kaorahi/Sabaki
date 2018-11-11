@@ -27,34 +27,32 @@ let themesDict = null
 
 let defaults = {
     'app.always_show_result': false,
-    'app.startup_check_updates': true,
-    'app.startup_check_updates_delay': 3000,
-    'app.loadgame_delay': 100,
     'app.enable_hardware_acceleration': true,
     'app.hide_busy_delay': 200,
+    'app.loadgame_delay': 100,
+    'app.startup_check_updates': true,
+    'app.startup_check_updates_delay': 3000,
     'app.zoom_factor': 1,
-    'autoplay.sec_per_move': 1,
     'autoplay.max_sec_per_move': 99,
+    'autoplay.sec_per_move': 1,
+    'autoscroll.diff': 10,
     'autoscroll.max_interval': 200,
     'autoscroll.min_interval': 50,
-    'autoscroll.diff': 10,
-    'cleanmarkup.cross': true,
-    'cleanmarkup.triangle': true,
-    'cleanmarkup.square': true,
-    'cleanmarkup.circle': true,
-    'cleanmarkup.line': true,
-    'cleanmarkup.arrow': true,
-    'cleanmarkup.label': true,
-    'cleanmarkup.comments': false,
+    'board.analysis_interval': 100,
+    'board.variation_instant_replay': false,
+    'board.variation_replay_interval': 500,
     'cleanmarkup.annotations': false,
+    'cleanmarkup.arrow': true,
+    'cleanmarkup.circle': true,
+    'cleanmarkup.comments': false,
+    'cleanmarkup.cross': true,
     'cleanmarkup.hotspots': false,
+    'cleanmarkup.label': true,
+    'cleanmarkup.line': true,
+    'cleanmarkup.square': true,
+    'cleanmarkup.triangle': true,
+    'cleanmarkup.winrate': false,
     'comments.show_move_interpretation': true,
-    'console.blocked_commands': [
-        'boardsize', 'clear_board', 'play',
-        'genmove', 'undo', 'fixed_handicap',
-        'place_free_handicap', 'set_free_handicap',
-        'loadsgf', 'komi'
-    ],
     'console.max_history_count': 1000,
     'debug.dev_tools': false,
     'edit.click_currentvertex_to_remove': true,
@@ -68,30 +66,22 @@ let defaults = {
     'game.default_komi': 6.5,
     'game.default_handicap': 0,
     'game.goto_end_after_loading': false,
+    'game.navigation_analysis_delay': 500,
     'game.navigation_sensitivity': 40,
     'game.show_ko_warning': true,
     'game.show_suicide_warning': true,
     'gamechooser.show_delay': 100,
     'gamechooser.thumbnail_size': 153,
     'graph.delay': 200,
-    'graph.edge_color': '#eee',
-    'graph.edge_inactive_color': '#777',
-    'graph.edge_size': 2,
-    'graph.edge_inactive_size': 1,
     'graph.grid_size': 22,
-    'graph.node_active_color': '#f76047',
-    'graph.node_bookmark_color': '#c678dd',
-    'graph.node_color': '#eee',
-    'graph.node_inactive_color': '#777',
-    'graph.node_comment_color': '#6bb1ff',
-    'graph.node_inactive_bookmark_color': '#643d6f',
-    'graph.node_inactive_comment_color': '#365980',
     'graph.node_size': 4,
+    'gtp.auto_genmove': true,
     'gtp.engine_quit_timeout': 3000,
     'gtp.move_delay': 300,
     'gtp.start_game_after_attach': true,
     'score.estimator_iterations': 100,
-    'setting.overwrite.v0.16.0': ['console.blocked_commands', 'window.minheight'],
+    'scoring.method': 'territory',
+    'setting.overwrite.v0.16.0': ['window.minheight'],
     'setting.overwrite.v0.17.1': ['graph.collapse_tokens_count'],
     'setting.overwrite.v0.19.0_1': ['window.minheight', 'graph.delay'],
     'setting.overwrite.v0.19.1': ['app.startup_check_updates_delay'],
@@ -99,19 +89,21 @@ let defaults = {
     'setting.overwrite.v0.30.0-beta': ['graph.delay', 'window.minheight', 'window.minwidth'],
     'setting.overwrite.v0.33.0': ['console.max_history_count'],
     'setting.overwrite.v0.33.4': ['score.estimator_iterations'],
-    'scoring.method': 'territory',
     'sgf.comment_properties': ['C', 'N', 'UC', 'GW', 'DM', 'GB', 'BM', 'TE', 'DO', 'IT'],
     'sound.capture_delay_max': 500,
     'sound.capture_delay_min': 300,
     'sound.enable': true,
     'theme.custom_whitestones': null,
     'theme.custom_blackstones': null,
+    'theme.custom_board': null,
     'theme.custom_background': null,
     'theme.current': null,
-    'view.properties_height': 50,
-    'view.properties_minheight': 20,
     'view.animated_stone_placement': true,
     'view.fuzzy_stone_placement': true,
+    'view.leftsidebar_width': 250,
+    'view.leftsidebar_minwidth': 100,
+    'view.properties_height': 50,
+    'view.properties_minheight': 20,
     'view.show_menubar': true,
     'view.show_leftsidebar': false,
     'view.show_comments': false,
@@ -120,10 +112,9 @@ let defaults = {
     'view.show_move_colorization': true,
     'view.show_next_moves': true,
     'view.show_siblings': true,
-    'view.leftsidebar_width': 250,
-    'view.leftsidebar_minwidth': 100,
     'view.sidebar_width': 200,
     'view.sidebar_minwidth': 100,
+    'view.winrategraph_height': 60,
     'infooverlay.duration': 2000,
     'window.height': 604,
     'window.minheight': 440,
@@ -146,6 +137,13 @@ exports.load = function() {
     for (let key in defaults) {
         if (key in settings) continue
         settings[key] = defaults[key]
+    }
+
+    // Delete invalid settings
+
+    for (let key in settings) {
+        if (key in defaults) continue
+        delete settings[key]
     }
 
     // Overwrite settings
@@ -190,7 +188,16 @@ exports.loadThemes = function() {
 }
 
 exports.save = function() {
-    fs.writeFileSync(exports.settingsPath, JSON.stringify(settings, null, '  '))
+    let keys = Object.keys(settings).sort()
+
+    fs.writeFileSync(
+        exports.settingsPath,
+        JSON.stringify(
+            keys.reduce((acc, key) => (acc[key] = settings[key], acc), {}),
+            null, '  '
+        )
+    )
+
     return exports
 }
 

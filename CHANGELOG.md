@@ -2,6 +2,62 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased][unreleased]
+
+**Added**
+
+* When adding analysis variation to the game tree, SGF move annotation will be supplied automatically
+* Color coded game tree nodes according to their move annotation
+
+**Changed**
+
+* Continuous analysis when navigating the game in analysis mode
+* Record winrate values when generating moves even if analysis mode is turned off
+
+**Fixed**
+
+* Better error handling regarding GTP engine crashes
+* Fix incremental engine synchronization not working properly when handicap stones are involved
+* Fix freeze when starting analysis after suspending an engine
+
+## [Sabaki v0.40.1][v0.40.1] (2018-11-06)
+
+**Added**
+
+* Add setting for Sabaki to play out analysis variations instantly
+
+**Fixed**
+
+* Fix Sabaki incorrectly not detecting analysis capabilities when engine hasn't fully initialized yet
+* Fix engine synchronization not working when engine has been suspended
+* Fix analysis heatmap disappearing when Leela Zero reaches maximum visits/playouts
+* Fix board rendering issues
+* Fix Sabaki accidentally saving into non-SGF files
+
+## [Sabaki v0.40.0][v0.40.0] (2018-11-04)
+
+**Added**
+
+* Ability to analyze Go board using analysis GTP commands
+* Save winrate values and visualizes them in a graph
+* Support [GoKibitz](https://gokibitz.com/)-style variations in comments
+* Setting to turn off engine auto move generation
+* Ability to set custom board image without userstyles
+
+**Changed**
+
+* **Breaking:** New future-proof theming strategy; old themes may not work in this release anymore
+* More efficient engine syncing
+* No GTP commands are blocked in the GTP console anymore
+* GTP console is now faster
+* Warn user when GTP can't support board size
+* Suspending engines is now allowed while engine is thinking
+
+**Fixed**
+
+* Navigating by pressing up/down keys doesn't stutter anymore
+* Fix extemely slow starting time on Linux (Thanks to [@hadim](https://github.com/hadim))
+
 ## [Sabaki v0.35.1][v0.35.1] (2018-08-04)
 
 **Fixed**
@@ -716,7 +772,9 @@ All notable changes to this project will be documented in this file.
 
 First release
 
-[unreleased]: https://github.com/SabakiHQ/Sabaki/compare/v0.35.1...master
+[unreleased]: https://github.com/SabakiHQ/Sabaki/compare/v0.40.1...master
+[v0.40.1]: https://github.com/SabakiHQ/Sabaki/compare/v0.40.0...v0.40.1
+[v0.40.0]: https://github.com/SabakiHQ/Sabaki/compare/v0.35.1...v0.40.0
 [v0.35.1]: https://github.com/SabakiHQ/Sabaki/compare/v0.35.0...v0.35.1
 [v0.35.0]: https://github.com/SabakiHQ/Sabaki/compare/v0.34.1...v0.35.0
 [v0.34.1]: https://github.com/SabakiHQ/Sabaki/compare/v0.34.0...v0.34.1
