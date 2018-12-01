@@ -8,17 +8,8 @@ module.exports = (env, argv) => ({
         path: __dirname
     },
 
-    devtool: 'source-map',
+    devtool: argv.mode === 'production' ? false : 'cheap-module-eval-source-map',
     target: 'electron-renderer',
-
-    module: {
-        rules: [
-            {
-                test: /\.sgf$/,
-                use: 'raw-loader'
-            }
-        ]
-    },
 
     resolve: {
         alias: {
