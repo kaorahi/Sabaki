@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased][unreleased]
+
+**Added**
+
+* Ability to highlight relevant stones for automatically generated move names
+* Link to Sensei's Library for some automatically generated move names
+
+**Fixed**
+
+* Fix Sabaki not being able to append space characters in comment titles
+
+## [Sabaki v0.42.0][v0.42.0] (2019-01-22)
+
+**Added**
+
+* Winrate graph is now resizable (Thanks to [@dbosst](https://github.com/dbosst))
+* GTP console logging (Thanks to [@dbosst](https://github.com/dbosst))
+
+**Changed**
+
+* More precise navigation when navigating by pressing up/down arrow keys
+* In area scoring, number of handicap stones are added to white's score, according to Chinese scoring (Thanks to [@dbosst](https://github.com/dbosst))
+
+**Fixed**
+
+* Fix Sabaki hanging sometimes when analysis variations contain pass moves (Thanks to [@dbosst](https://github.com/dbosst))
+
 ## [Sabaki v0.41.0][v0.41.0] (2018-11-29)
 
 **Added**
@@ -772,7 +799,8 @@ All notable changes to this project will be documented in this file.
 
 First release
 
-[unreleased]: https://github.com/SabakiHQ/Sabaki/compare/v0.41.0...master
+[unreleased]: https://github.com/SabakiHQ/Sabaki/compare/v0.42.0...master
+[v0.42.0]: https://github.com/SabakiHQ/Sabaki/compare/v0.41.0...v0.42.0
 [v0.41.0]: https://github.com/SabakiHQ/Sabaki/compare/v0.40.1...v0.41.0
 [v0.40.1]: https://github.com/SabakiHQ/Sabaki/compare/v0.40.0...v0.40.1
 [v0.40.0]: https://github.com/SabakiHQ/Sabaki/compare/v0.35.1...v0.40.0

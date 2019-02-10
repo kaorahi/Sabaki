@@ -15,7 +15,6 @@ const InputBox = require('./InputBox')
 const BusyScreen = require('./BusyScreen')
 const InfoOverlay = require('./InfoOverlay')
 
-const boardmatcher = require('@sabaki/boardmatcher')
 const deadstones = require('@sabaki/deadstones')
 const gtp = require('@sabaki/gtp')
 const sgf = require('@sabaki/sgf')
@@ -32,6 +31,7 @@ const helper = require('../modules/helper')
 const rotation = require('../modules/rotation')
 const setting = remote.require('./setting')
 const sound = require('../modules/sound')
+const gtplogger = require('../modules/gtplogger')
 
 class App extends Component {
     constructor() {
@@ -122,8 +122,8 @@ class App extends Component {
 
         // Expose submodules
 
-        this.modules = {Board, EngineSyncer, boardmatcher, dialog,
-            fileformats, gametree, helper, setting, sound}
+        this.modules = {Board, EngineSyncer, dialog, fileformats,
+            gametree, helper, setting, sound}
 
         // Bind state to settings
 
@@ -226,7 +226,11 @@ class App extends Component {
                     this.setState({fullScreen: false})
                 }
             } else if (['ArrowUp', 'ArrowDown'].includes(evt.key)) {
-                if (document.activeElement !== document.body || evt.ctrlKey || evt.metaKey) return
+                if (
+                    evt.ctrlKey || evt.metaKey
+                    || helper.isTextLikeElement(document.activeElement)
+                ) return
+
                 evt.preventDefault()
 
                 let sign = evt.key === 'ArrowUp' ? -1 : 1
@@ -252,6 +256,7 @@ class App extends Component {
             setTimeout(() => {
                 if (this.askForSave()) {
                     this.detachEngines()
+                    gtplogger.close()
                     this.closeWindow = true
                     this.window.close()
                 }
@@ -309,6 +314,7 @@ class App extends Component {
             if (!this.window.isMaximized() && !this.window.isMinimized() && !this.window.isFullScreen()) {
                 this.window.setContentSize(width + widthDiff, height)
             }
+            window.dispatchEvent(new Event('resize'))
         }
 
         // Handle zoom factor
@@ -545,6 +551,8 @@ class App extends Component {
     }
 
     async loadGameTrees(gameTrees, {suppressAskForSave = false} = {}) {
+        gtplogger.rotate()
+
         if (!suppressAskForSave && !this.askForSave()) return
 
         this.setBusy(true)
@@ -1353,6 +1361,8 @@ class App extends Component {
     startAutoscrolling(step) {
         if (this.autoscrollId != null) return
 
+        let first = true
+        let maxDelay = setting.get('autoscroll.max_interval')
         let minDelay = setting.get('autoscroll.min_interval')
         let diff = setting.get('autoscroll.diff')
 
@@ -1360,10 +1370,13 @@ class App extends Component {
             this.goStep(step)
 
             clearTimeout(this.autoscrollId)
-            this.autoscrollId = setTimeout(() => scroll(Math.max(minDelay, delay - diff)), delay)
+            this.autoscrollId = setTimeout(() => {
+                scroll(first ? maxDelay : Math.max(minDelay, delay - diff))
+                first = false
+            }, delay)
         }
 
-        scroll(setting.get('autoscroll.max_interval'))
+        scroll(400)
     }
 
     stopAutoscrolling() {
@@ -2039,6 +2052,14 @@ class App extends Component {
             return
         }
 
+        if (engines != null && engines.some(x => x != null)) {
+            // Only load the logger when actually attaching engines (not detaching):
+            // This is necessary since loadGameTrees() rotates to a new log, and
+            // we need to wait for the previous engines to finish logging
+
+            gtplogger.updatePath()
+        }
+
         let quitTimeout = setting.get('gtp.engine_quit_timeout')
 
         for (let i = 0; i < attachedEngines.length; i++) {
@@ -2052,6 +2073,13 @@ class App extends Component {
                 this.attachedEngineSyncers[i] = syncer
 
                 syncer.controller.on('command-sent', evt => {
+                    gtplogger.write({
+                        type: 'stdin',
+                        message: gtp.Command.toString(evt.command),
+                        sign: this.attachedEngineSyncers.indexOf(syncer) === 0 ? 1 : -1,
+                        engine: engines[i].name
+                    })
+
                     if (evt.command.name === 'list_commands') {
                         evt.getResponse().then(response =>
                             this.setState(({engineCommands}) => {
@@ -2067,6 +2095,13 @@ class App extends Component {
                 })
 
                 syncer.controller.on('stderr', ({content}) => {
+                    gtplogger.write({
+                        type: 'stderr',
+                        message: content,
+                        sign: this.attachedEngineSyncers.indexOf(syncer) === 0 ? 1 : -1,
+                        engine: engines[i].name
+                    })
+
                     this.setState(({consoleLog}) => ({
                         consoleLog: [...consoleLog, {
                             sign: this.attachedEngineSyncers.indexOf(syncer) === 0 ? 1 : -1,
@@ -2077,7 +2112,23 @@ class App extends Component {
                     }))
                 })
 
+                syncer.controller.on('started', () => {
+                    gtplogger.write({
+                        type: 'meta',
+                        message: 'Engine Started',
+                        sign: this.attachedEngineSyncers.indexOf(syncer) === 0 ? 1 : -1,
+                        engine: engines[i].name
+                    })
+                })
+
                 syncer.controller.on('stopped', () => this.setState(({engineCommands}) => {
+                    gtplogger.write({
+                        type: 'meta',
+                        message: 'Engine Stopped',
+                        sign: this.attachedEngineSyncers.indexOf(syncer) === 0 ? 1 : -1,
+                        engine: engines[i].name
+                    })
+
                     let j = this.attachedEngineSyncers.indexOf(syncer)
                     engineCommands[j] = []
 
@@ -2100,7 +2151,16 @@ class App extends Component {
 
     suspendEngines() {
         for (let syncer of this.attachedEngineSyncers) {
-            if (syncer != null) syncer.controller.kill()
+            if (syncer != null) {
+                gtplogger.write({
+                    type: 'meta',
+                    message: 'Engine Suspending',
+                    sign: this.attachedEngineSyncers.indexOf(syncer) === 0 ? 1 : -1,
+                    engine: syncer.engine.name
+                })
+
+                syncer.controller.kill()
+            }
         }
 
         this.stopGeneratingMoves()
@@ -2134,6 +2194,13 @@ class App extends Component {
                 waiting: !end
             })
 
+            gtplogger.write({
+                type: 'stdout',
+                message: line,
+                sign: this.attachedEngineSyncers.indexOf(syncer) === 0 ? 1 : -1,
+                engine: syncer.engine.name
+            })
+
             // Parse analysis info
 
             if (
@@ -2146,10 +2213,15 @@ class App extends Component {
                     .split(/\s*info\s+/).slice(1)
                     .map(x => x.trim())
                     .map(x => {
-                        let match = x.match(/[A-Za-z]\d+(\s+[A-Za-z]\d+)*$/)
-                        if (match == null) return null
-
-                        return [x.slice(0, match.index), match[0].split(/\s+/)]
+                        let matchPV = x.match(/(pass|[A-Za-z]\d+)(\s+(pass|[A-Za-z]\d+))*\s*$/)
+                        if (matchPV == null)
+                            return null
+                        let matchPass = matchPV[0].match(/pass/)
+                        if (matchPass == null) {
+                            return [x.slice(0, matchPV.index), matchPV[0].split(/\s+/)]
+                        } else {
+                            return [x.slice(0, matchPV.index), matchPV[0].slice(0, matchPass.index).split(/\s+/)]
+                        }
                     })
                     .filter(x => x != null)
                     .map(([x, y]) => [
@@ -2185,10 +2257,19 @@ class App extends Component {
         })
 
         getResponse()
-        .catch(_ => updateEntry({
-            response: {internal: true, content: 'connection failed'},
-            waiting: false
-        }))
+        .catch(_ => {
+            gtplogger.write({
+                type: 'meta',
+                message: 'Connection Failed',
+                sign: this.attachedEngineSyncers.indexOf(syncer) === 0 ? 1 : -1,
+                engine: syncer.engine.name
+            })
+
+            updateEntry({
+                response: {internal: true, content: 'connection failed'},
+                waiting: false
+            })
+        })
     }
 
     async syncEngines({passPlayer = null} = {}) {
@@ -2277,6 +2358,13 @@ class App extends Component {
             if (syncer == null || syncer.controller.process == null) continue
 
             syncer.controller.process.stdin.write('\n')
+
+            gtplogger.write({
+                type: 'meta',
+                message: 'Stopping Analysis',
+                sign: this.attachedEngineSyncers.indexOf(syncer) === 0 ? 1 : -1,
+                engine: syncer.engine.name
+            })
         }
 
         if (removeAnalysisData) this.setState({analysisTreePosition: null, analysis: null})
@@ -2328,6 +2416,7 @@ class App extends Component {
 
         let {commands} = this.attachedEngineSyncers[playerIndex]
         let commandName = ['genmove_analyze', 'lz-genmove_analyze', 'genmove'].find(x => commands.includes(x))
+        if (commandName == null) commandName = 'genmove'
 
         let responseContent = await (
             commandName === 'genmove'
