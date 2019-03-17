@@ -2635,7 +2635,20 @@ class App extends Component {
 
         state = Object.assign(state, this.inferredState)
 
-        ipcRenderer.send('dump-state', {treePosition: sabaki.state.treePosition})
+        if (typeof sabaki.state.treePosition === 'number') {
+            // v0.43.0
+            // dump minimum v0.42-style treePosition for backward compatibility
+            let nodes = []
+            const nodeFor = id => id !== null && sabaki.state.gameTree.get(id)
+            const f = n => n && (nodes.unshift(n.data), f(nodeFor(n.parentId)))
+            f(nodeFor(sabaki.state.treePosition))
+            const parent = null, index = nodes.length - 1
+            const v042TreePosition = [{nodes, parent}, index]
+            ipcRenderer.send('dump-state', {treePosition: v042TreePosition})
+        } else {
+            // v0.42.0
+            ipcRenderer.send('dump-state', {treePosition: sabaki.state.treePosition})
+        }
 
         return h('section',
             {
