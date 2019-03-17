@@ -30,6 +30,7 @@ class EngineSyncer extends EventEmitter {
 
         let {path, args, commands} = engine
 
+        this._busy = false
         this.engine = engine
         this.commands = []
         this.state = JSON.parse(defaultStateJSON)
@@ -59,12 +60,15 @@ class EngineSyncer extends EventEmitter {
 
         this.controller.on('stopped', () => {
             this.state = JSON.parse(defaultStateJSON)
+            this.busy = false
         })
 
         this.controller.on('command-sent', async ({command, getResponse, subscribe}) => {
             // Track engine state
 
             let res = null
+
+            this.busy = this.controller.busy
 
             if (!['lz-genmove_analyze', 'genmove_analyze'].includes(command.name)) {
                 try {
@@ -128,12 +132,26 @@ class EngineSyncer extends EventEmitter {
                 this.state.dirty = true
             }
         })
+
+        this.controller.on('response-received', () => {
+            this.busy = this.controller.busy
+        })
     }
 
-    async sync(treePosition) {
+    get busy() {
+        return this._busy
+    }
+
+    set busy(value) {
+        if (value !== this._busy) {
+            this._busy = value
+            this.emit('busy-changed')
+        }
+    }
+
+    async sync(tree, id) {
         let controller = this.controller
-        let rootTree = gametree.getRoot(treePosition[0])
-        let board = gametree.getBoard(...treePosition)
+        let board = gametree.getBoard(tree, id)
 
         if (!board.isSquare()) {
             throw new Error('GTP engines don’t support non-square boards.')
@@ -145,7 +163,7 @@ class EngineSyncer extends EventEmitter {
 
         // Update komi
 
-        let komi = +gametree.getRootProperty(rootTree, 'KM', 0)
+        let komi = +gametree.getRootProperty(tree, 'KM', 0)
 
         if (komi !== this.state.komi) {
             let {error} = await controller.sendCommand({name: 'komi', args: [komi]})
@@ -182,21 +200,21 @@ class EngineSyncer extends EventEmitter {
         let moves = []
         let promises = []
         let synced = true
+        let nodes = [...tree.listNodesVertically(id, -1, {})].reverse()
 
-        for (let tp = [rootTree, 0]; true; tp = gametree.navigate(...tp, 1)) {
-            let node = tp[0].nodes[tp[1]]
-            let nodeBoard = gametree.getBoard(...tp)
+        for (let node of nodes) {
+            let nodeBoard = gametree.getBoard(tree, node.id)
             let placedHandicapStones = false
 
             if (
-                node.AB
-                && node.AB.length >= 2
+                node.data.AB
+                && node.data.AB.length >= 2
                 && engineBoard.isEmpty()
                 && this.commands.includes('set_free_handicap')
             ) {
                 // Place handicap stones
 
-                let vertices = [].concat(...node.AB.map(sgf.parseCompressedVertices)).sort()
+                let vertices = [].concat(...node.data.AB.map(sgf.parseCompressedVertices)).sort()
                 let coords = vertices
                     .map(v => board.vertex2coord(v))
                     .filter(x => x != null)
@@ -221,10 +239,10 @@ class EngineSyncer extends EventEmitter {
             }
 
             for (let prop of ['B', 'W', 'AB', 'AW']) {
-                if (!(prop in node) || placedHandicapStones && prop === 'AB') continue
+                if (node.data[prop] == null || placedHandicapStones && prop === 'AB') continue
 
                 let sign = prop.slice(-1) === 'B' ? 1 : -1
-                let vertices = [].concat(...node[prop].map(sgf.parseCompressedVertices))
+                let vertices = [].concat(...node.data[prop].map(sgf.parseCompressedVertices))
 
                 for (let vertex of vertices) {
                     if (engineBoard.get(vertex) !== 0) continue
@@ -240,7 +258,7 @@ class EngineSyncer extends EventEmitter {
                 break
             }
 
-            if (helper.vertexEquals(tp, treePosition)) break
+            if (node.id === id) break
         }
 
         if (synced) {

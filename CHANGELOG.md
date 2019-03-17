@@ -2,12 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased][unreleased]
+## [Sabaki v0.43.0][v0.43.0] (2019-03-16)
 
 **Added**
 
+* Ability to undo/redo all of your edits
+* Ability to display move numbers on the board
 * Ability to highlight relevant stones for automatically generated move names
 * Link to Sensei's Library for some automatically generated move names
+
+**Changed**
+
+* New next/previous variation switch behavior
 
 **Fixed**
 
@@ -799,7 +805,8 @@ All notable changes to this project will be documented in this file.
 
 First release
 
-[unreleased]: https://github.com/SabakiHQ/Sabaki/compare/v0.42.0...master
+[unreleased]: https://github.com/SabakiHQ/Sabaki/compare/v0.43.0...master
+[v0.43.0]: https://github.com/SabakiHQ/Sabaki/compare/v0.42.0...v0.43.0
 [v0.42.0]: https://github.com/SabakiHQ/Sabaki/compare/v0.41.0...v0.42.0
 [v0.41.0]: https://github.com/SabakiHQ/Sabaki/compare/v0.40.1...v0.41.0
 [v0.40.1]: https://github.com/SabakiHQ/Sabaki/compare/v0.40.0...v0.40.1

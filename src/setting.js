@@ -54,12 +54,24 @@ let defaults = {
     'cleanmarkup.triangle': true,
     'cleanmarkup.winrate': false,
     'comments.show_move_interpretation': true,
+    'comments.commit_delay': 500,
     'console.max_history_count': 1000,
     'debug.dev_tools': false,
     'edit.click_currentvertex_to_remove': true,
+    'edit.copy_variation_strip_props': [
+        'AP', 'CA', 'FF', 'GM', 'ST', 'SZ', 'KM', 'HA',
+        'AN', 'BR', 'BT', 'CP', 'DT', 'EV', 'GN', 'GC', 'ON',
+        'OT', 'PB', 'PC', 'PW', 'RE', 'RO', 'RU', 'SO', 'TM',
+        'US', 'WR', 'WT'
+    ],
+    'edit.flatten_inherit_root_props': [
+        'BR', 'BT', 'DT', 'EV', 'GN', 'GC', 'PB',
+        'PW', 'RE', 'SO', 'SZ', 'WT', 'WR'
+    ],
+    'edit.history_batch_interval': 500,
+    'edit.max_history_count': 1000,
     'edit.show_removenode_warning': true,
     'edit.show_removeothervariations_warning': true,
-    'edit.undo_delay': 100,
     'engines.list': [],
     'file.show_reload_warning': true,
     'find.delay': 100,
@@ -114,6 +126,7 @@ let defaults = {
     'view.show_coordinates': false,
     'view.show_graph': false,
     'view.show_move_colorization': true,
+    'view.show_move_numbers': false,
     'view.show_next_moves': true,
     'view.show_siblings': true,
     'view.sidebar_width': 200,

@@ -31,15 +31,22 @@ function newWindow(path) {
     windows.push(window)
     buildMenu()
 
-    window.webContents.setAudioMuted(!setting.get('sound.enable'))
-    window.webContents.on('did-finish-load', () => {
-        if (path) window.webContents.send('load-file', path)
-    }).on('new-window', evt => {
-        evt.preventDefault()
+    window.once('ready-to-show', () => {
+        window.show()
     })
 
     window.on('closed', () => {
         window = null
+    })
+
+    window.webContents.setAudioMuted(!setting.get('sound.enable'))
+
+    window.webContents.on('did-finish-load', () => {
+        if (path) window.webContents.send('load-file', path)
+    })
+
+    window.webContents.on('new-window', evt => {
+        evt.preventDefault()
     })
 
     window.loadURL(`file://${join(__dirname, '..', 'index.html')}`)
@@ -110,9 +117,9 @@ function buildMenu(disableAll = false) {
 }
 
 async function checkForUpdates(showFailDialogs) {
-    let info = await updater.check(`SabakiHQ/${app.getName()}`)
-
     try {
+        let info = await updater.check(`SabakiHQ/${app.getName()}`)
+
         if (info.hasUpdates) {
             dialog.showMessageBox({
                 type: 'info',
