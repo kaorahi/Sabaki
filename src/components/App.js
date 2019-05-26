@@ -22,16 +22,17 @@ const influence = require('@sabaki/influence')
 
 deadstones.useFetch('./node_modules/@sabaki/deadstones/wasm/deadstones_bg.wasm')
 
+const i18n = require('../i18n')
 const Board = require('../modules/board')
 const EngineSyncer = require('../modules/enginesyncer')
 const dialog = require('../modules/dialog')
 const fileformats = require('../modules/fileformats')
 const gametree = require('../modules/gametree')
+const gtplogger = require('../modules/gtplogger')
 const helper = require('../modules/helper')
-const rotation = require('../modules/rotation')
 const setting = remote.require('./setting')
 const sound = require('../modules/sound')
-const gtplogger = require('../modules/gtplogger')
+const treetransformer = require('../modules/treetransformer')
 
 class App extends Component {
     constructor() {
@@ -128,7 +129,7 @@ class App extends Component {
         // Expose submodules
 
         this.modules = {Board, EngineSyncer, dialog, fileformats,
-            gametree, helper, setting, sound}
+            gametree, helper, i18n, setting, sound}
 
         // Bind state to settings
 
@@ -154,7 +155,7 @@ class App extends Component {
                 this.askForReload()
             }
 
-            ipcRenderer.send('build-menu', this.state.busy > 0)
+            this.buildMenu()
         })
 
         this.window.on('resize', () => {
@@ -170,7 +171,7 @@ class App extends Component {
 
         // Handle main menu items
 
-        let menuData = require('../menu')
+        let menuData = require('../menu').get()
 
         let handleMenuClicks = menu => {
             for (let item of menu) {
@@ -295,11 +296,14 @@ class App extends Component {
         let {basename} = require('path')
         let title = this.appName
         let {representedFilename, gameIndex, gameTrees} = this.state
+        let t = i18n.context('app')
 
         if (representedFilename)
             title = basename(representedFilename)
         if (gameTrees.length > 1)
-            title += ' — Game ' + (gameIndex + 1)
+            title += ' — ' + t(p => `Game ${p.gameNumber}`, {
+                gameNumber: gameIndex + 1
+            })
         if (representedFilename && process.platform != 'darwin')
             title += ' — ' + this.appName
 
@@ -309,12 +313,12 @@ class App extends Component {
         // Handle full screen & menu bar
 
         if (prevState.fullScreen !== this.state.fullScreen) {
-            if (this.state.fullScreen) this.flashInfoOverlay('Press Esc to exit full screen mode')
+            if (this.state.fullScreen) this.flashInfoOverlay(t('Press Esc to exit full screen mode'))
             this.window.setFullScreen(this.state.fullScreen)
         }
 
         if (prevState.showMenuBar !== this.state.showMenuBar) {
-            if (!this.state.showMenuBar) this.flashInfoOverlay('Press Alt to show menu bar')
+            if (!this.state.showMenuBar) this.flashInfoOverlay(t('Press Alt to show menu bar'))
             this.window.setMenuBarVisibility(this.state.showMenuBar)
             this.window.setAutoHideMenuBar(!this.state.showMenuBar)
         }
@@ -350,7 +354,7 @@ class App extends Component {
         }
     }
 
-    updateSettingState(key = null) {
+    updateSettingState(key = null, {buildMenu = true} = {}) {
         let data = {
             'app.zoom_factor': 'zoomFactor',
             'view.show_menubar': 'showMenuBar',
@@ -368,12 +372,13 @@ class App extends Component {
         }
 
         if (key == null) {
-            for (let k in data) this.updateSettingState(k)
+            for (let k in data) this.updateSettingState(k, {buildMenu: false})
+            this.buildMenu()
             return
         }
 
         if (key in data) {
-            ipcRenderer.send('build-menu', this.state.busy > 0)
+            if (buildMenu) this.buildMenu()
             this.setState({[data[key]]: setting.get(key)})
         }
     }
@@ -383,6 +388,12 @@ class App extends Component {
     }
 
     // User Interface
+
+    buildMenu() {
+        ipcRenderer.send('build-menu', {
+            disableAll: this.state.busy > 0
+        })
+    }
 
     setSidebarWidth(sidebarWidth) {
         this.setState({sidebarWidth}, () => window.dispatchEvent(new Event('resize')))
@@ -556,24 +567,31 @@ class App extends Component {
     }
 
     async newFile({playSound = false, showInfo = false, suppressAskForSave = false} = {}) {
+        if (!suppressAskForSave && !this.askForSave()) return
+
         let emptyTree = this.getEmptyGameTree()
 
-        await this.loadGameTrees([emptyTree], {suppressAskForSave})
+        await this.loadGameTrees([emptyTree], {suppressAskForSave: true})
 
         if (showInfo) this.openDrawer('info')
         if (playSound) sound.playNewGame()
     }
 
-    async loadFile(filename = null, {suppressAskForSave = false} = {}) {
+    async loadFile(filename = null, {suppressAskForSave = false, clearHistory = true} = {}) {
         if (!suppressAskForSave && !this.askForSave()) return
+
+        let t = i18n.context('app.file')
 
         if (!filename) {
             dialog.showOpenDialog({
                 properties: ['openFile'],
-                filters: [...fileformats.meta, {name: 'All Files', extensions: ['*']}]
+                filters: [
+                    ...fileformats.meta,
+                    {name: t('All Files'), extensions: ['*']}
+                ]
             }, ({result}) => {
                 if (result) filename = result[0]
-                if (filename) this.loadFile(filename, {suppressAskForSave: true})
+                if (filename) this.loadFile(filename, {suppressAskForSave: true, clearHistory})
             })
 
             return
@@ -606,12 +624,12 @@ class App extends Component {
 
             if (gameTrees.length == 0) throw true
         } catch (err) {
-            dialog.showMessageBox('This file is unreadable.', 'warning')
+            dialog.showMessageBox(t('This file is unreadable.'), 'warning')
             success = false
         }
 
         if (success) {
-            await this.loadGameTrees(gameTrees, {suppressAskForSave: true})
+            await this.loadGameTrees(gameTrees, {suppressAskForSave: true, clearHistory})
 
             this.setState({representedFilename: filename})
             this.fileHash = this.generateFileHash()
@@ -628,9 +646,10 @@ class App extends Component {
         this.setBusy(false)
     }
 
-    async loadContent(content, extension, {suppressAskForSave = false} = {}) {
+    async loadContent(content, extension, options = {}) {
         this.setBusy(true)
 
+        let t = i18n.context('app.file')
         let gameTrees = []
         let success = true
         let lastProgress = -1
@@ -646,18 +665,18 @@ class App extends Component {
 
             if (gameTrees.length == 0) throw true
         } catch (err) {
-            dialog.showMessageBox('This file is unreadable.', 'warning')
+            dialog.showMessageBox(t('This file is unreadable.'), 'warning')
             success = false
         }
 
         if (success) {
-            await this.loadGameTrees(gameTrees, {suppressAskForSave})
+            await this.loadGameTrees(gameTrees, options)
         }
 
         this.setBusy(false)
     }
 
-    async loadGameTrees(gameTrees, {suppressAskForSave = false} = {}) {
+    async loadGameTrees(gameTrees, {suppressAskForSave = false, clearHistory = true} = {}) {
         gtplogger.rotate()
 
         if (!suppressAskForSave && !this.askForSave()) return
@@ -668,7 +687,7 @@ class App extends Component {
 
         await helper.wait(setting.get('app.loadgame_delay'))
 
-        if (gameTrees.length != 0) {
+        if (gameTrees.length > 0) {
             this.detachEngines()
             this.clearConsole()
 
@@ -685,7 +704,7 @@ class App extends Component {
             this.treeHash = this.generateTreeHash()
             this.fileHash = this.generateFileHash()
 
-            this.clearHistory()
+            if (clearHistory) this.clearHistory()
         }
 
         this.setBusy(false)
@@ -699,11 +718,16 @@ class App extends Component {
     }
 
     saveFile(filename = null, confirmExtension = true) {
+        let t = i18n.context('app.file')
+
         if (!filename || confirmExtension && extname(filename) !== '.sgf') {
             let cancel = false
 
             dialog.showSaveDialog({
-                filters: [fileformats.sgf.meta, {name: 'All Files', extensions: ['*']}]
+                filters: [
+                    fileformats.sgf.meta,
+                    {name: t('All Files'), extensions: ['*']}
+                ]
             }, ({result}) => {
                 if (result) this.saveFile(result, false)
                 cancel = !result
@@ -735,7 +759,9 @@ class App extends Component {
         this.setState({gameTrees})
         this.recordHistory()
 
-        return sgf.stringify(gameTrees.map(tree => tree.root))
+        return sgf.stringify(gameTrees.map(tree => tree.root), {
+            linebreak: setting.get('sgf.format_code') ? helper.linebreak : ''
+        })
     }
 
     generateTreeHash() {
@@ -755,13 +781,14 @@ class App extends Component {
     }
 
     askForSave() {
+        let t = i18n.context('app.file')
         let hash = this.generateTreeHash()
 
         if (hash !== this.treeHash) {
             let answer = dialog.showMessageBox(
-                'Your changes will be lost if you close this file without saving.',
+                t('Your changes will be lost if you close this file without saving.'),
                 'warning',
-                ['Save', 'Don’t Save', 'Cancel'], 2
+                [t('Save'), t('Don’t Save'), t('Cancel')], 2
             )
 
             if (answer === 0) return this.saveFile(this.state.representedFilename)
@@ -772,16 +799,23 @@ class App extends Component {
     }
 
     askForReload() {
+        let t = i18n.context('app.file')
         let hash = this.generateFileHash()
 
         if (hash != null && hash !== this.fileHash) {
-            let answer = dialog.showMessageBox([
-                `This file has been changed outside of ${this.appName}.`,
-                'Do you want to reload the file? Your changes will be lost.'
-            ].join('\n'), 'warning', ['Reload', 'Don’t Reload'], 1)
+            let answer = dialog.showMessageBox(
+                t(p => [
+                    `This file has been changed outside of ${p.appName}.`,
+                    'Do you want to reload the file? Your changes will be lost.'
+                ].join('\n'), {appName: this.appName}),
+                'warning', [t('Reload'), t('Don’t Reload')], 1
+            )
 
             if (answer === 0) {
-                this.loadFile(this.state.representedFilename, {suppressAskForSave: true})
+                this.loadFile(this.state.representedFilename, {
+                    suppressAskForSave: true,
+                    clearHistory: false
+                })
             } else {
                 this.treeHash = null
             }
@@ -795,6 +829,7 @@ class App extends Component {
     clickVertex(vertex, {button = 0, ctrlKey = false, x = 0, y = 0} = {}) {
         this.closeDrawer()
 
+        let t = i18n.context('app.play')
         let {gameTrees, gameIndex, gameCurrents, treePosition} = this.state
         let tree = gameTrees[gameIndex]
         let board = gametree.getBoard(tree, treePosition)
@@ -880,11 +915,11 @@ class App extends Component {
                 } else if (['number', 'label'].includes(tool)) {
                     // Show label editing context menu
 
-                    let click = () => dialog.showInputBox('Enter label text', ({value}) => {
+                    let click = () => dialog.showInputBox(t('Enter label text'), ({value}) => {
                         this.useTool('label', vertex, value)
                     })
 
-                    let template = [{label: '&Edit Label', click}]
+                    let template = [{label: t('&Edit Label'), click}]
                     helper.popupMenu(template, x, y)
 
                     return
@@ -977,6 +1012,7 @@ class App extends Component {
             this.setMode('play')
         }
 
+        let t = i18n.context('app.play')
         let {gameTrees, gameIndex, treePosition} = this.state
         let tree = gameTrees[gameIndex]
         let node = tree.get(treePosition)
@@ -1005,12 +1041,12 @@ class App extends Component {
                 ko = prevBoard.getPositionHash() === hash
 
                 if (ko && dialog.showMessageBox(
-                    [
+                    t([
                         'You are about to play a move which repeats a previous board position.',
                         'This is invalid in some rulesets.'
-                    ].join('\n'),
+                    ].join('\n')),
                     'info',
-                    ['Play Anyway', 'Don’t Play'], 1
+                    [t('Play Anyway'), t('Don’t Play')], 1
                 ) != 0) return
             }
 
@@ -1028,12 +1064,12 @@ class App extends Component {
 
             if (suicide && setting.get('game.show_suicide_warning')) {
                 if (dialog.showMessageBox(
-                    [
+                    t([
                         'You are about to play a suicide move.',
                         'This is invalid in some rulesets.'
-                    ].join('\n'),
+                    ].join('\n')),
                     'info',
-                    ['Play Anyway', 'Don’t Play'], 1
+                    [t('Play Anyway'), t('Don’t Play')], 1
                 ) != 0) return
             }
         }
@@ -1445,6 +1481,7 @@ class App extends Component {
         let {gameTrees, gameIndex} = this.state
         let newIndex = Math.max(0, Math.min(gameTrees.length - 1, gameIndex + step))
 
+        this.closeDrawer()
         this.setCurrentTreePosition(gameTrees[newIndex], gameTrees[newIndex].root.id)
     }
 
@@ -1559,6 +1596,7 @@ class App extends Component {
             whiteRank: playerRanks[1],
             gameName: gametree.getRootProperty(tree, 'GN'),
             eventName: gametree.getRootProperty(tree, 'EV'),
+            gameComment: gametree.getRootProperty(tree, 'GC'),
             date: gametree.getRootProperty(tree, 'DT'),
             result: gametree.getRootProperty(tree, 'RE'),
             komi,
@@ -1585,7 +1623,9 @@ class App extends Component {
                     draft.removeProperty(draft.root.id, 'SZ')
                 }
             }
+        })
 
+        newTree = newTree.mutate(draft => {
             let props = {
                 blackName: 'PB',
                 blackRank: 'BR',
@@ -1593,6 +1633,7 @@ class App extends Component {
                 whiteRank: 'WR',
                 gameName: 'GN',
                 eventName: 'EV',
+                gameComment: 'GC',
                 date: 'DT',
                 result: 'RE',
                 komi: 'KM',
@@ -1600,16 +1641,16 @@ class App extends Component {
             }
 
             for (let key in props) {
-                if (data[key] == null) continue
+                if (!(key in data)) continue
                 let value = data[key]
 
-                if (value && value.toString().trim() !== '') {
+                if (value && value.toString() !== '') {
                     if (key === 'komi') {
                         if (isNaN(value)) value = 0
 
                         setting.set('game.default_komi', value)
                     } else if (key === 'handicap') {
-                        let board = gametree.getBoard(tree, tree.root.id)
+                        let board = gametree.getBoard(newTree, newTree.root.id)
                         let stones = board.getHandicapPlacement(+value)
 
                         value = stones.length
@@ -1682,7 +1723,7 @@ class App extends Component {
         let newTree = tree.mutate(draft => {
             for (let [key, prop] of [['title', 'N'], ['comment', 'C']]) {
                 if (key in data) {
-                    if (data[key] && data[key].trim() !== '') {
+                    if (data[key] && data[key] !== '') {
                         draft.updateProperty(treePosition, prop, [data[key]])
                     } else {
                         draft.removeProperty(treePosition, prop)
@@ -1730,7 +1771,24 @@ class App extends Component {
         let {treePosition, gameTrees, gameIndex} = this.state
         let tree = gameTrees[gameIndex]
         let {size} = this.getGameInfo(tree)
-        let newTree = rotation.rotateTree(tree, size[0], size[1], anticlockwise)
+        let newTree = treetransformer.rotateTree(tree, size[0], size[1], anticlockwise)
+
+        this.setCurrentTreePosition(newTree, treePosition, {clearCache: true})
+    }
+
+    flipBoard(horizontal) {
+        let {treePosition, gameTrees, gameIndex} = this.state
+        let tree = gameTrees[gameIndex]
+        let {size} = this.getGameInfo(tree)
+        let newTree = treetransformer.flipTree(tree, size[0], size[1], horizontal)
+
+        this.setCurrentTreePosition(newTree, treePosition, {clearCache: true})
+    }
+
+    invertColors() {
+        let {treePosition, gameTrees, gameIndex} = this.state
+        let tree = gameTrees[gameIndex]
+        let newTree = treetransformer.invertTreeColors(tree)
 
         this.setCurrentTreePosition(newTree, treePosition, {clearCache: true})
     }
@@ -1795,6 +1853,7 @@ class App extends Component {
         if (gameIndex < 0) return
 
         let board = gametree.getBoard(tree, treePosition)
+        let playerSign = this.getPlayer(tree, treePosition)
         let inherit = setting.get('edit.flatten_inherit_root_props')
 
         let newTree = tree.mutate(draft => {
@@ -1820,6 +1879,7 @@ class App extends Component {
 
         this.setState({gameTrees: gameTrees.map((t, i) => i === gameIndex ? newTree : t)})
         this.setCurrentTreePosition(newTree, newTree.root.id)
+        this.setPlayer(newTree, treePosition, playerSign)
     }
 
     makeMainVariation(tree, treePosition) {
@@ -1868,10 +1928,11 @@ class App extends Component {
     }
 
     removeNode(tree, treePosition, {suppressConfirmation = false} = {}) {
+        let t = i18n.context('app.node')
         let node = tree.get(treePosition)
 
         if (node.parentId == null) {
-            dialog.showMessageBox('The root node cannot be removed.', 'warning')
+            dialog.showMessageBox(t('The root node cannot be removed.'), 'warning')
             return
         }
 
@@ -1879,9 +1940,9 @@ class App extends Component {
             suppressConfirmation !== true
             && setting.get('edit.show_removenode_warning')
             && dialog.showMessageBox(
-                'Do you really want to remove this node?',
+                t('Do you really want to remove this node?'),
                 'warning',
-                ['Remove Node', 'Cancel'], 1
+                [t('Remove Node'), t('Cancel')], 1
             ) === 1
         ) return
 
@@ -1906,13 +1967,15 @@ class App extends Component {
     }
 
     removeOtherVariations(tree, treePosition, {suppressConfirmation = false} = {}) {
+        let t = i18n.context('app.node')
+
         if (
             suppressConfirmation !== true
             && setting.get('edit.show_removeothervariations_warning')
             && dialog.showMessageBox(
-                'Do you really want to remove all other variations?',
+                t('Do you really want to remove all other variations?'),
                 'warning',
-                ['Remove Variations', 'Cancel'], 1
+                [t('Remove Variations'), t('Cancel')], 1
             ) == 1
         ) return
 
@@ -1964,43 +2027,44 @@ class App extends Component {
     openNodeMenu(tree, treePosition, {x, y} = {}) {
         if (this.state.mode === 'scoring') return
 
+        let t = i18n.context('menu.edit')
         let template = [
             {
-                label: 'C&opy Variation',
+                label: t('&Copy Variation'),
                 click: () => this.copyVariation(tree, treePosition)
             },
             {
-                label: 'C&ut Variation',
+                label: t('Cu&t Variation'),
                 click: () => this.cutVariation(tree, treePosition)
             },
             {
-                label: '&Paste Variation',
+                label: t('&Paste Variation'),
                 click: () => this.pasteVariation(tree, treePosition)
             },
             {type: 'separator'},
             {
-                label: 'Make &Main Variation',
+                label: t('Make Main &Variation'),
                 click: () => this.makeMainVariation(tree, treePosition)
             },
             {
-                label: 'Shift &Left',
+                label: t('Shift &Left'),
                 click: () => this.shiftVariation(tree, treePosition, -1)
             },
             {
-                label: 'Shift Ri&ght',
+                label: t('Shift Ri&ght'),
                 click: () => this.shiftVariation(tree, treePosition, 1)
             },
             {type: 'separator'},
             {
-                label: '&Flatten',
+                label: t('&Flatten'),
                 click: () => this.flattenVariation(tree, treePosition)
             },
             {
-                label: '&Remove Node',
+                label: t('&Remove Node'),
                 click: () => this.removeNode(tree, treePosition)
             },
             {
-                label: 'Remove &Other Variations',
+                label: t('Remove &Other Variations'),
                 click: () => this.removeOtherVariations(tree, treePosition)
             }
         ]
@@ -2009,33 +2073,34 @@ class App extends Component {
     }
 
     openCommentMenu(tree, treePosition, {x, y} = {}) {
+        let t = i18n.context('menu.comment')
         let node = tree.get(treePosition)
 
         let template = [
             {
-                label: '&Clear Annotations',
+                label: t('&Clear Annotations'),
                 click: () => {
                     this.setComment(tree, treePosition, {positionAnnotation: null, moveAnnotation: null})
                 }
             },
             {type: 'separator'},
             {
-                label: 'Good for &Black',
+                label: t('Good for &Black'),
                 type: 'checkbox',
                 data: {positionAnnotation: 'GB'}
             },
             {
-                label: '&Unclear Position',
+                label: t('&Unclear Position'),
                 type: 'checkbox',
                 data: {positionAnnotation: 'UC'}
             },
             {
-                label: '&Even Position',
+                label: t('&Even Position'),
                 type: 'checkbox',
                 data: {positionAnnotation: 'DM'}
             },
             {
-                label: 'Good for &White',
+                label: t('Good for &White'),
                 type: 'checkbox',
                 data: {positionAnnotation: 'GW'}
             }
@@ -2045,22 +2110,22 @@ class App extends Component {
             template.push(
                 {type: 'separator'},
                 {
-                    label: '&Good Move',
+                    label: t('&Good Move'),
                     type: 'checkbox',
                     data: {moveAnnotation: 'TE'}
                 },
                 {
-                    label: '&Interesting Move',
+                    label: t('&Interesting Move'),
                     type: 'checkbox',
                     data: {moveAnnotation: 'IT'}
                 },
                 {
-                    label: '&Doubtful Move',
+                    label: t('&Doubtful Move'),
                     type: 'checkbox',
                     data: {moveAnnotation: 'DO'}
                 },
                 {
-                    label: 'B&ad Move',
+                    label: t('B&ad Move'),
                     type: 'checkbox',
                     data: {moveAnnotation: 'BM'}
                 }
@@ -2070,7 +2135,7 @@ class App extends Component {
         template.push(
             {type: 'separator'},
             {
-                label: '&Hotspot',
+                label: t('&Hotspot'),
                 type: 'checkbox',
                 data: {hotspot: true}
             }
@@ -2092,16 +2157,17 @@ class App extends Component {
     }
 
     openVariationMenu(sign, variation, {x, y, appendSibling = false, startNodeProperties = {}} = {}) {
+        let t = i18n.context('menu.variation')
         let {gameTrees, gameIndex, treePosition} = this.state
         let tree = gameTrees[gameIndex]
 
         helper.popupMenu([{
-            label: '&Add Variation',
+            label: t('&Add Variation'),
             click: () => {
                 let isRootNode = tree.get(treePosition).parentId == null
 
                 if (appendSibling && isRootNode) {
-                    dialog.showMessageBox('The root node cannot have sibling nodes.', 'warning', ['OK'])
+                    dialog.showMessageBox(t('The root node cannot have sibling nodes.'), 'warning')
                     return
                 }
 
@@ -2273,6 +2339,7 @@ class App extends Component {
         let sign = 1 - this.attachedEngineSyncers.indexOf(syncer) * 2
         if (sign > 1) sign = 0
 
+        let t = i18n.context('app.engine')
         let {treePosition} = this.state
         let entry = {sign, name: syncer.engine.name, command, waiting: true}
         let maxLength = setting.get('console.max_history_count')
@@ -2367,16 +2434,17 @@ class App extends Component {
             })
 
             updateEntry({
-                response: {internal: true, content: 'connection failed'},
+                response: {internal: true, content: t('connection failed')},
                 waiting: false
             })
         })
     }
 
-    async syncEngines({passPlayer = null} = {}) {
+    async syncEngines({showErrorDialog = false} = {}) {
         if (this.attachedEngineSyncers.every(x => x == null)) return
-
         if (this.engineBusySyncing) return
+
+        let t = i18n.context('app.engine')
         this.engineBusySyncing = true
 
         try {
@@ -2391,20 +2459,14 @@ class App extends Component {
 
                 if (treePosition === this.state.treePosition) break
             }
-
-            // Send pass if required
-
-            if (passPlayer != null) {
-                let color = passPlayer > 0 ? 'B' : 'W'
-                let {controller} = this.attachedEngineSyncers[passPlayer > 0 ? 0 : 1] || {}
-
-                if (controller != null) {
-                    await controller.sendCommand({name: 'play', args: [color, 'pass']})
-                }
-            }
         } catch (err) {
             this.engineBusySyncing = false
-            throw err
+
+            if (showErrorDialog) {
+                dialog.showMessageBox(t(err.message), 'warning')
+            } else {
+                throw err
+            }
         }
 
         this.engineBusySyncing = false
@@ -2418,6 +2480,9 @@ class App extends Component {
 
         this.setState({analysis: null, analysisTreePosition: this.state.treePosition})
 
+        if (this.state.generatingMoves) return
+
+        let t = i18n.context('app.engine')
         let error = false
         let {currentPlayer} = this.inferredState
         let color = currentPlayer > 0 ? 'B' : 'W'
@@ -2428,8 +2493,10 @@ class App extends Component {
 
             let engineIndex = controllerIndices.find(i =>
                 this.attachedEngineSyncers[i] != null
-                && (this.attachedEngineSyncers[i].commands.includes('lz-analyze')
-                || this.attachedEngineSyncers[i].commands.includes('analyze'))
+                && (
+                    this.attachedEngineSyncers[i].commands.includes('lz-analyze')
+                    || this.attachedEngineSyncers[i].commands.includes('analyze')
+                )
             )
 
             if (engineIndex != null) {
@@ -2448,7 +2515,7 @@ class App extends Component {
         }
 
         if (showWarning && error) {
-            dialog.showMessageBox('You haven’t attached any engines that supports analysis.', 'warning')
+            dialog.showMessageBox(t('You haven’t attached any engines that supports analysis.'), 'warning')
             this.stopAnalysis()
         }
     }
@@ -2472,7 +2539,7 @@ class App extends Component {
         if (removeAnalysisData) this.setState({analysisTreePosition: null, analysis: null})
     }
 
-    async generateMove({passPlayer = null, firstMove = true, followUp = false} = {}) {
+    async generateMove({firstMove = true, followUp = false} = {}) {
         this.closeDrawer()
 
         if (!firstMove && !this.state.generatingMoves) {
@@ -2482,6 +2549,7 @@ class App extends Component {
             this.setState({generatingMoves: true})
         }
 
+        let t = i18n.context('app.engine')
         let {gameTrees, gameIndex} = this.state
         let {currentPlayer} = this.inferredState
         let tree = gameTrees[gameIndex]
@@ -2505,7 +2573,7 @@ class App extends Component {
         this.setBusy(true)
 
         try {
-            await this.syncEngines({passPlayer})
+            await this.syncEngines({showErrorDialog: true})
         } catch (err) {
             this.stopGeneratingMoves()
             this.hideInfoOverlay()
@@ -2515,7 +2583,7 @@ class App extends Component {
         }
 
         if (firstMove && followUp && otherSyncer != null) {
-            this.flashInfoOverlay('Press Esc to stop playing')
+            this.flashInfoOverlay(t('Press Esc to stop playing'))
         }
 
         let {commands} = this.attachedEngineSyncers[playerIndex]
@@ -2556,7 +2624,9 @@ class App extends Component {
             pass = false
 
             if (responseContent.toLowerCase() === 'resign') {
-                dialog.showMessageBox(`${playerSyncer.engine.name} has resigned.`)
+                dialog.showMessageBox(t(p => `${p.engineName} has resigned.`, {
+                    engineName: playerSyncer.engine.name
+                }))
 
                 this.stopGeneratingMoves()
                 this.hideInfoOverlay()
@@ -2569,7 +2639,7 @@ class App extends Component {
             vertex = board.coord2vertex(responseContent)
         }
 
-        let previousNode = tree.navigate(this.state.treePosition, -1, {})
+        let previousNode = tree.get(this.state.treePosition)
         let previousPass = previousNode != null && ['W', 'B'].some(color =>
             previousNode.data[color] != null
             && !board.hasVertex(sgf.parseVertex(previousNode.data[color][0]))
@@ -2592,7 +2662,9 @@ class App extends Component {
     stopGeneratingMoves() {
         if (!this.state.generatingMoves) return
 
-        this.showInfoOverlay('Please wait…')
+        let t = i18n.context('app.engine')
+
+        this.showInfoOverlay(t('Please wait…'))
         this.setState({generatingMoves: false})
     }
 
