@@ -73,7 +73,7 @@ exports.build = function(props = {}) {
                         },
                         {
                             label: t('menu.file', 'Copy &ASCII Diagram'),
-                            click: () => clipboard.writeText(gametree.getBoard(...treePosition()).generateAscii())
+                            click: () => clipboard.writeText(sabaki.getBoardAscii())
                         }
                     ]
                 },
@@ -472,32 +472,6 @@ exports.build = function(props = {}) {
                 {
                     label: t('menu.tools', '&Edit SGF Properties…'),
                     click: () => sabaki.openDrawer('advancedproperties')
-                },
-                {type: 'separator'},
-                {
-                    label: t('menu.tools', '&Rotate Clockwise'),
-                    enabled: !disableGameNavigation,
-                    click: () => sabaki.rotateBoard(false)
-                },
-                {
-                    label: t('menu.tools', 'Rotate &Anticlockwise'),
-                    enabled: !disableGameNavigation,
-                    click: () => sabaki.rotateBoard(true)
-                },
-                {
-                    label: t('menu.tools', '&Flip Horizontally'),
-                    enabled: !disableGameNavigation,
-                    click: () => sabaki.flipBoard(true)
-                },
-                {
-                    label: t('menu.tools', 'Flip &Vertically'),
-                    enabled: !disableGameNavigation,
-                    click: () => sabaki.flipBoard(false)
-                },
-                {
-                    label: t('menu.tools', '&Invert Colors'),
-                    enabled: !disableGameNavigation,
-                    click: () => sabaki.invertColors()
                 }
             ]
         },
@@ -589,6 +563,41 @@ exports.build = function(props = {}) {
                             label: t('menu.view', '&Reset'),
                             accelerator: 'CmdOrCtrl+0',
                             click: () => setting.set('app.zoom_factor', 1)
+                        }
+                    ]
+                },
+                {
+                    label: t('menu.view', 'T&ransform Board'),
+                    submenu: [
+                        {
+                            label: t('menu.tools', 'Rotate &Anticlockwise'),
+                            accelerator: 'CmdOrCtrl+Alt+Left',
+                            click: () => sabaki.pushBoardTransformation('rrr')
+                        },
+                        {
+                            label: t('menu.tools', 'Rotate &Clockwise'),
+                            accelerator: 'CmdOrCtrl+Alt+Right',
+                            click: () => sabaki.pushBoardTransformation('r')
+                        },
+                        {
+                            label: t('menu.tools', '&Flip Horizontally'),
+                            accelerator: 'CmdOrCtrl+Alt+Down',
+                            click: () => sabaki.pushBoardTransformation('f')
+                        },
+                        {
+                            label: t('menu.tools', 'Flip &Vertically'),
+                            accelerator: 'CmdOrCtrl+Alt+Shift+Down',
+                            click: () => sabaki.pushBoardTransformation('rrf')
+                        },
+                        {
+                            label: t('menu.tools', '&Invert Colors'),
+                            accelerator: 'CmdOrCtrl+Alt+Up',
+                            click: () => sabaki.pushBoardTransformation('i')
+                        },
+                        {
+                            label: t('menu.tools', '&Reset'),
+                            accelerator: 'CmdOrCtrl+Alt+0',
+                            click: () => sabaki.setBoardTransformation('')
                         }
                     ]
                 }
